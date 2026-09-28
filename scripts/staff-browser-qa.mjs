@@ -1,0 +1,42 @@
+import assert from 'node:assert/strict';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {pathToFileURL} from 'node:url';
+import {resolve} from 'node:path';
+import {staffFixture} from '../tests/helpers/staff-fixture.mjs';
+import {dayKey,shiftDay} from '../assets/domain.js';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE?pathToFileURL(process.env.PLAYWRIGHT_MODULE):'playwright');
+const fixture=await staffFixture(),browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXE?{executablePath:process.env.BROWSER_EXE}:{})});
+const page=await browser.newPage({viewport:{width:1440,height:1020}}),errors=[],external=[],checks=[];
+const out=resolve('test-results');await mkdir(out,{recursive:true});
+page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(!r.url().startsWith(fixture.base)&&!r.url().startsWith('blob:'))external.push(r.url());});
+const go=async hash=>{await page.evaluate(h=>location.hash=h,hash);await page.waitForTimeout(100);};
+const saved=()=>page.waitForFunction(()=>!document.querySelector('dialog').open&&!document.body.classList.contains('busy'));
+const login=async()=>{await page.locator('#login-form [name=email]').fill('personel@example.invalid');await page.locator('#login-form [name=password]').fill('fixture-not-real-password');await page.locator('#login-form button').click();await page.getByRole('heading',{name:'Miło Cię widzieć'}).waitFor();};
+try{
+ await page.goto(fixture.base);assert.equal(await page.locator('#login-form').count(),1);assert.equal(await page.locator('a[href*="signup"]').count(),0);
+ const denied=await fixture.handler({httpMethod:'POST',headers:{authorization:'Bearer outsider-token'},body:JSON.stringify({action:'patient',data:{name:'Forbidden'}})});assert.equal(denied.statusCode,403);
+ await login();assert.equal(await page.locator('.clinic-shortcuts').count(),0);assert.equal(await page.locator('.demo-strip').count(),0);assert(!await page.locator('body').innerText().then(x=>x.includes('Zosia')));checks.push('Logowanie personelu, odrzucenie nieuprawnionego konta, brak danych demo');
+ await go('patients');await page.locator('[data-new-patient]').click();await page.locator('[name=name]').fill('Pacjent testowy');await page.locator('[name=birth_date]').fill('2020-02-10');await page.locator('[name=email]').fill('dziecko@example.invalid');
+ await page.locator('[name=guardian_name]').fill('Opiekun testowy');await page.locator('[name=guardian_relation]').fill('matka');await page.locator('[name=guardian_email]').fill('opiekun@example.invalid');await page.locator('#patient-form button[type=submit]').click();await saved();
+ await page.locator('.patient-card').click();await page.getByRole('heading',{name:'Pacjent testowy'}).waitFor();const pid=(await fixture.pg.query('select id from podo_patients')).rows[0].id;assert((await page.locator('.guardian-card').innerText()).includes('opiekun@example.invalid'));checks.push('Karta dziecka i opiekuna zapisane przez API w PostgreSQL');
+ await page.locator('.tabs [data-patient-tab=cases]').click();await page.locator('[data-new-case]').click();await page.locator('[name=title]').fill('Terapia testowa');await page.locator('[name=location]').selectOption({label:'Lewa stopa · pięta'});await page.locator('#case-form button[type=submit]').click();await saved();
+ const cid=(await fixture.pg.query('select id from podo_cases')).rows[0].id;assert.equal(await page.locator('.therapy-card').count(),1);
+ await page.locator('[data-case-encounter]').click();await page.locator('[name=observations]').fill('Obserwacja testowa');await page.locator('[name=performed]').fill('Kontrola testowa');await page.locator('[name=aftercare]').fill('Zalecenia testowe');await page.locator('#encounter-form button[type=submit]').click();await saved();
+ const eid=(await fixture.pg.query('select id from podo_encounters')).rows[0].id;await go(`patient/${pid}?tab=cases`);assert.equal(await page.locator('.therapy-event').count(),1);checks.push('Problem i kontrola utrwalone w API i widoczne na osi czasu');
+ await page.locator('[data-case-status]').click();await page.locator('#confirm-case-status').click();await saved();assert((await page.locator('.therapy-card').innerText()).includes('Zakończony'));assert.equal((await fixture.pg.query('select status from podo_cases')).rows[0].status,'closed');checks.push('Zakończenie problemu odświeża stan serwera');
+ await page.locator('[data-case-photos]').click();await page.locator('#photo-encounter').selectOption(eid);await page.locator('#photo-phase').selectOption('after');
+ const buffer=await readFile(resolve('assets/icon-512.png'));await page.locator('[data-photo-input]').first().setInputFiles({name:'syntetyczny.png',mimeType:'image/png',buffer});
+ await page.waitForFunction(()=>document.querySelector('.photo-card img')?.naturalWidth>0&&!document.body.classList.contains('busy'));
+ const photo=(await fixture.pg.query('select * from podo_photos')).rows[0];assert.equal(photo.patient_id,pid);assert.equal(photo.case_id,cid);assert.equal(photo.encounter_id,eid);assert.equal(photo.phase,'after');assert.equal(fixture.objects.size,1);checks.push('Zdjęcie przechodzi kompresję backendu i zapis metadanych z pełnym kontekstem');
+ await page.locator('.topbar [data-book]').click();const future=shiftDay(dayKey(),3);await page.locator('#range-day').fill(future);await page.locator('#range-day').dispatchEvent('change');await page.locator('#range-start').selectOption('2');await page.locator('#range-end').selectOption('3');await page.locator('#range-next').click();await page.locator('[name=patient_id]').selectOption(pid);await page.locator('[name=service_id]').selectOption('brace');await page.locator('[name=price]').fill('195');
+ assert((await page.locator('#booking-recipient').innerText()).includes('opiekun@example.invalid'));assert(!(await page.locator('#booking-recipient').innerText()).includes('Demo'));await page.locator('#booking-form button[type=submit]').click();await saved();
+ const visit=(await fixture.pg.query('select * from podo_appointments')).rows[0];assert.equal(visit.price,19500);assert.equal(visit.patient_email,'opiekun@example.invalid');checks.push('Rezerwacja pracownika, cena i adres opiekuna w bazie; brak realnej wysyłki');
+ await go('services');await page.locator('[data-service=brace]').click();await page.locator('[name=price_max]').fill('235');await page.locator('[name=time_confirmed]').check();await page.locator('#service-form button[type=submit]').click();await saved();assert.equal((await fixture.pg.query("select price_max from podo_services where id='brace'")).rows[0].price_max,23500);checks.push('Edycja widełek cennika przez API');
+ await go('dashboard');await page.reload();await page.locator('#login-form').waitFor();await login();await go(`patient/${pid}?tab=cases`);assert.equal(await page.locator('.therapy-event').count(),1);await page.locator('[data-case-photos]').click();await page.waitForFunction(()=>document.querySelector('.photo-card img')?.naturalWidth>0);checks.push('Odświeżenie i ponowne logowanie zachowuje kartę, terapię i zdjęcie');
+ await go('calendar');await page.locator(`[data-day="${future}"]`).click();await page.locator('[data-appointment]').first().click();await page.locator('[data-cancel-appointment]').click();await page.locator('#confirm-cancel').click();await saved();
+ const jobs=(await fixture.pg.query('select * from podo_mail')).rows;assert(jobs.filter(j=>j.kind!=='cancelled').every(j=>j.state==='cancelled'));checks.push('Anulowanie w UI odwołuje kolejkę w bazie');
+ await page.setViewportSize({width:390,height:844});await go(`patient/${pid}`);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.equal(await page.locator('[capture=environment]').count(),1);checks.push('Karta i zdjęcia w mobilnym układzie personelu');
+ assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+ const result={passed:checks.length,checks,errors,external_requests:external,scope:'Lokalnie: prawdziwy kod UI/API, PostgreSQL PGlite; atrapy Auth/Storage, bez chmury i poczty.'};await writeFile(resolve(out,'staff-browser-qa.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+}catch(e){console.log((await page.locator('body').innerText()).slice(-4000));console.log(errors);await page.screenshot({path:resolve(out,'staff-error.png'),fullPage:true});throw e;}
+finally{await browser.close();await fixture.close();}
