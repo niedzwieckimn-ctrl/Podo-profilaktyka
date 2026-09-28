@@ -1,0 +1,21 @@
+{
+  "name": "podocare",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Osobna aplikacja gabinetu podologicznego oparta na przepływach Massages SPA",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/serve.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  },
+  "dependencies": {
+    "sharp": "0.35.4"
+  }
+}
