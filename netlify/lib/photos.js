@@ -20,12 +20,13 @@ async function storage(path,method,body){
  if(!r.ok)throw Object.assign(Error('Nie udało się zapisać lub otworzyć prywatnego zdjęcia. Sprawdź migrację Storage.'),{status:502,duplicate:result.error==='Duplicate'||Number(result.statusCode)===409||r.status===409});return result;
 }
 export async function photoContext(d){
- const context={case_id:d.case_id||null,encounter_id:d.encounter_id||null,phase:d.phase||'control',taken_on:d.taken_on||dayKey()};
- for(const id of [context.case_id,context.encounter_id])if(id&&!uuid(id))throw Error('Nieprawidłowe powiązanie zdjęcia.');
+ const context={case_id:d.case_id||null,encounter_id:d.encounter_id||null,appointment_id:d.appointment_id||null,phase:d.phase||'control',taken_on:d.taken_on||dayKey()};
+ for(const id of [context.case_id,context.encounter_id,context.appointment_id])if(id&&!uuid(id))throw Error('Nieprawidłowe powiązanie zdjęcia.');
  const parsed=new Date(context.taken_on+'T12:00:00Z');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(context.taken_on)||!Number.isFinite(parsed.getTime())||parsed.toISOString().slice(0,10)!==context.taken_on||context.taken_on>dayKey()||!['before','control','after'].includes(context.phase))throw Error('Sprawdź datę i etap zdjęcia.');
  if(context.case_id){const c=(await db(`podo_cases?id=eq.${context.case_id}&select=patient_id`))[0];if(c?.patient_id!==d.patient_id)throw Error('Problem musi należeć do tego pacjenta.');}
- if(context.encounter_id){const v=(await db(`podo_encounters?id=eq.${context.encounter_id}&select=patient_id,case_id`))[0];if(v?.patient_id!==d.patient_id||(v.case_id||null)!==context.case_id)throw Error('Wizyta dotyczy innego pacjenta lub problemu.');}
+ if(context.appointment_id){const a=(await db(`podo_appointments?id=eq.${context.appointment_id}&select=patient_id,case_id`))[0];if(a?.patient_id!==d.patient_id||(a.case_id&&a.case_id!==context.case_id))throw Error('Wizyta dotyczy innego pacjenta lub problemu.');}
+ if(context.encounter_id){const v=(await db(`podo_encounters?id=eq.${context.encounter_id}&select=patient_id,case_id,appointment_id`))[0];if(v?.patient_id!==d.patient_id||(v.case_id||null)!==context.case_id||(context.appointment_id&&v.appointment_id&&v.appointment_id!==context.appointment_id))throw Error('Dokumentacja dotyczy innego pacjenta, problemu lub wizyty.');context.appointment_id=context.appointment_id||v.appointment_id||null;}
  return context;
 }
 export async function uploadPhoto(d,user){
