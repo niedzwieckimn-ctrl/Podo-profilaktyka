@@ -7,7 +7,7 @@ import {handler} from '../../netlify/functions/podo-api.js';
 export async function staffFixture(){
  const pg=new PGlite(),root=resolve('.'),actor=crypto.randomUUID(),outsider=crypto.randomUUID(),objects=new Map();
  await pg.exec('create role anon;create role authenticated;create role service_role;create schema auth;create table auth.users(id uuid primary key);create schema storage;create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);');
- for(const name of ['001_podocare.sql','002_patient_photos.sql','003_staff_clinic.sql','004_clinic_setup.sql'])await pg.exec(await readFile(resolve(root,'supabase',name),'utf8'));
+ for(const name of ['001_podocare.sql','002_patient_photos.sql','003_staff_clinic.sql','004_clinic_setup.sql','005_simple_visit_workflow.sql'])await pg.exec(await readFile(resolve(root,'supabase',name),'utf8'));
  await pg.query('insert into auth.users values($1),($2)',[actor,outsider]);await pg.query('insert into podo_admins values($1)',[actor]);
  const session={access_token:'staff-test-token',refresh_token:'refresh-test-token',expires_in:3600};
  let base;const previousFetch=global.fetch,previousEnv={};
@@ -35,6 +35,9 @@ export async function staffFixture(){
   if(path.startsWith('/rest/v1/rpc/')){
    try{let result;const name=path.split('/').at(-1);
     if(name==='podo_action')result=(await pg.query('select podo_action($1,$2::jsonb,$3) r',[data.p_action,JSON.stringify(data.p_data),data.p_actor])).rows[0].r;
+    else if(name==='podo_book')result=(await pg.query('select podo_book($1::jsonb,$2) r',[JSON.stringify(data.p_data),data.p_actor])).rows[0].r;
+    else if(name==='podo_reschedule')result=(await pg.query('select podo_reschedule($1::jsonb,$2) r',[JSON.stringify(data.p_data),data.p_actor])).rows[0].r;
+    else if(name==='podo_visit_note')result=(await pg.query('select podo_visit_note($1::jsonb,$2) r',[JSON.stringify(data.p_data),data.p_actor])).rows[0].r;
     else if(name==='podo_add_photo')result=(await pg.query('select podo_add_photo($1::jsonb,$2) r',[JSON.stringify(data.p_data),data.p_actor])).rows[0].r;
     else throw Error('RPC not in fixture');return response(result);
    }catch(e){return response({message:e.message},400);}
