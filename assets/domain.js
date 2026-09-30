@@ -63,21 +63,4 @@ export function validateEncounter(v) {
   if(v.pain!==null&&(!Number.isInteger(v.pain)||v.pain<0||v.pain>10)) throw Error('Ból musi być w zakresie 0–10.');
   return v;
 }
-export function isSaveIdeaCommand(text) {
-  const t=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ł/g,'l').toLowerCase().trim();
-  return /^(prosze\s+)?(zapisz|dodaj)\b/.test(t)&&!/(pacjent|nazwisk|klient|rezerw|wywiad|dokumentac)/.test(t)&&t.length<160;
-}
 export function riskFlags(p) { return Object.entries(RISKS).filter(([k])=>p.profile?.[k]==='yes').map(([,v])=>v); }
-export function redact(text,patients=[]) {
-  let s=String(text||'').replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi,'[e-mail]').replace(/\+?\d[\d ()-]{7,}\d/g,'[numer]');
-  const words=patients.flatMap(p=>[p.name,p.phone,p.email,p.address,...String(p.name||'').split(/\s+/)]).filter(v=>v&&v.length>=3).sort((a,b)=>b.length-a.length);
-  for(const word of words) s=s.replace(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'giu'),'[pacjent]');
-  return s;
-}
-// Celowo bez nazwiska, daty urodzenia, kontaktu, adresu i opowieści z życia.
-export function advisorContext(patient,encounters) {
-  const profile={};
-  for(const k of [...Object.keys(RISKS),'allergies','medications','complaints','footwear','workload']) profile[k]=patient.profile?.[k]??'Nie ustalono';
-  const visits=encounters.filter(v=>v.patient_id===patient.id).sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,6).map(v=>({date:v.created_at.slice(0,10),zones:v.zones,pain:v.pain,observations:v.observations,performed:v.performed,aftercare:v.aftercare,followup_date:v.followup_date}));
-  return JSON.parse(redact(JSON.stringify({profile,visits}),[patient]));
-}

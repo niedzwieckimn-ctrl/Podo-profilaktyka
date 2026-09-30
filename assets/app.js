@@ -1,12 +1,12 @@
-import {esc,dayKey,date,time,clock,shiftDay,blockedCells,selection,validateRange,money,RISKS,TRI,validatePatient,validateEncounter,isSaveIdeaCommand,advisorContext} from './domain.js';
+import {esc,dayKey,date,time,clock,shiftDay,blockedCells,selection,validateRange,money,RISKS,TRI,validatePatient,validateEncounter} from './domain.js';
 import {seed,demoAction} from './demo.js';
 import * as ui from './ui.js';
 import {photoSection,compressPhoto} from './photos.js';
-import {personalizeDemo,clinicAction,validateClinicPatient,validateLinks,contactFor,priceLabel} from './clinic-profile.js';
+import {personalizeDemo,clinicAction,validateClinicPatient,validateLinks,contactFor,priceLabel,suggestPhotoContext} from './clinic-profile.js';
 import * as clinic from './clinic-ui.js';
 const root=document.querySelector('#root'),modal=document.querySelector('#modal'),toastBox=document.querySelector('#toast');
 const demo=new URLSearchParams(location.search).get('demo')==='1';
-let state,session,config,busy=false,selected=dayKey(),month=selected.slice(0,7),patientTab='overview',search='',chat=[],advisorPatient='',lastIdea=null,installPrompt;
+let state,session,config,busy=false,selected=dayKey(),month=selected.slice(0,7),patientTab='overview',search='',installPrompt,activeAppointmentId='',activeShowChoices=false;
 let range={day:selected,first:null,last:null,patient:''};
 let caseFilter='',photoCase='',photoEncounter='';
 const photoUrls=new Map();let pendingPhoto=null;
@@ -14,8 +14,8 @@ const route=()=>location.hash.slice(1)||'dashboard';
 const toast=(text)=>{toastBox.textContent=text;toastBox.classList.add('show');clearTimeout(toastBox.timer);toastBox.timer=setTimeout(()=>toastBox.classList.remove('show'),5500);};
 async function api(action,data={}) {
  if(demo&&action==='photo'){
-  if(state.clinic_profile)validateLinks(state,data.patient_id,data.case_id,data.encounter_id);
-  state.photos||=[];if(!state.photos.some(p=>p.id===data.id))state.photos.push({id:data.id,patient_id:data.patient_id,case_id:data.case_id||'',encounter_id:data.encounter_id||'',phase:data.phase||'control',taken_on:data.taken_on||dayKey(),created_at:new Date().toISOString(),url:URL.createObjectURL(data.blob)});return {id:data.id};
+  if(state.clinic_profile)validateLinks(state,data.patient_id,data.case_id,data.encounter_id,data.appointment_id);
+  state.photos||=[];if(!state.photos.some(p=>p.id===data.id))state.photos.push({id:data.id,patient_id:data.patient_id,case_id:data.case_id||'',encounter_id:data.encounter_id||'',appointment_id:data.appointment_id||'',phase:data.phase||'control',taken_on:data.taken_on||dayKey(),created_at:new Date().toISOString(),url:URL.createObjectURL(data.blob)});return {id:data.id};
  }
  if(demo){
   if(state.clinic_profile){
@@ -34,7 +34,7 @@ async function api(action,data={}) {
  if(!session)throw Error('Zaloguj się ponownie.');
  if(Date.now()>session.expires_at-60000) {
   const r=await fetch(`${config.url}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{apikey:config.key,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:session.refresh_token})});
-  if(!r.ok){session=null;state=null;chat=[];lastIdea=null;pendingPhoto=null;photoUrls.clear();modal.close();showLogin('Sesja wygasła. Zaloguj się ponownie.');throw Error('Sesja wygasła.');}
+  if(!r.ok){session=null;state=null;pendingPhoto=null;photoUrls.clear();modal.close();showLogin('Sesja wygasła. Zaloguj się ponownie.');throw Error('Sesja wygasła.');}
   session={...await r.json(),expires_at:Date.now()+3600000};
  }
  const r=await fetch('/.netlify/functions/podo-api',{method:action?'POST':'GET',headers:{Authorization:`Bearer ${session.access_token}`,...(action?{'Content-Type':'application/json'}:{})},body:action?JSON.stringify({action,data}):undefined});
@@ -46,8 +46,9 @@ function render(){
  if(!state)return;
  root.innerHTML=ui.shell(route(),demo,state.settings,state.user);
  const r=route(),content=document.querySelector('#content'),pid=r.split('/')[1]?.split('?')[0];
- const views={dashboard:()=>ui.dashboard(state),calendar:()=>ui.calendar(state,selected,month),patients:()=>ui.patients(state,search),services:()=>ui.services(state),finance:()=>ui.finance(state),ideas:()=>ui.ideas(state),advisor:()=>ui.advisor(state,chat,advisorPatient,demo,lastIdea),settings:()=>ui.settings(state,demo)};
- content.innerHTML=r.startsWith('patient/')?ui.patient(state,pid,patientTab==='cases'?'photos':patientTab):state.clinic_profile&&r==='services'?clinic.clinicServices(state):(views[r]||views.dashboard)();
+ const views={dashboard:()=>ui.dashboard(state),active:()=>ui.activeVisit(state,activeAppointmentId,activeShowChoices),calendar:()=>ui.calendar(state,selected,month),patients:()=>ui.patients(state,search),settings:()=>ui.settings(state,demo)};
+ content.innerHTML=r.startsWith('patient/')?ui.patient(state,pid,patientTab==='cases'?'photos':patientTab):r==='settings/services'?(state.clinic_profile?clinic.clinicServices(state):ui.services(state)):r==='settings/finance'?ui.finance(state):(views[r]||views.dashboard)();
+ if(r.startsWith('settings/'))content.insertAdjacentHTML('afterbegin','<a href="#settings" class="back-link">← Ustawienia</a>');
  if(state.clinic_profile)clinic.applyClinicTheme(root,state,r);
  if(r.startsWith('patient/')){
   if(state.clinic_profile){
@@ -63,7 +64,7 @@ function render(){
   }else content.insertAdjacentHTML('beforeend',photoSection(state,pid));
   hydratePhotos();
  }
- const chatEl=document.querySelector('#chat');if(chatEl)chatEl.scrollTop=chatEl.scrollHeight;
+ if(r==='active'&&activeAppointmentId){const a=state.appointments.find(a=>a.id===activeAppointmentId&&a.status==='confirmed');if(a){content.insertAdjacentHTML('beforeend',clinic.clinicPhotoSection(state,a.patient_id,a.case_id||'',''));hydratePhotos();}}
 }
 async function getPhotoUrl(id){
  const cached=photoUrls.get(id);if(cached&&cached.until>Date.now())return cached.url;
@@ -79,9 +80,9 @@ async function hydratePhotos(){
 async function uploadPendingPhoto(){
  if(!pendingPhoto)return;
  const d=pendingPhoto;
- try{await api('photo',demo?d:{id:d.id,patient_id:d.patient_id,base64:d.base64,case_id:d.case_id,encounter_id:d.encounter_id,phase:d.phase,taken_on:d.taken_on});}
+ try{await api('photo',demo?d:{id:d.id,patient_id:d.patient_id,base64:d.base64,case_id:d.case_id,encounter_id:d.encounter_id,appointment_id:d.appointment_id,phase:d.phase,taken_on:d.taken_on});}
  catch(e){showModal('Zdjęcie nie zostało zapisane',`<div class="padded"><p>${esc(e.message)}</p><p>Zdjęcie pozostaje w pamięci tej otwartej strony. Możesz ponowić zapis przy tym samym pacjencie.</p><div class="form-actions"><button class="outline" data-close>Zamknij</button><button class="primary" data-retry-photo>Ponów zapis</button></div></div>`);throw e;}
- pendingPhoto=null;
+ if(d.preview_url)URL.revokeObjectURL(d.preview_url);pendingPhoto=null;
  try{await refresh();toast(demo?'Zdjęcie dodano do karty w demo (do odświeżenia).':'Zdjęcie zapisano w karcie pacjenta.');}catch{toast('Zdjęcie zapisano, ale nie odświeżono galerii. Wczytaj ponownie kartę pacjenta.');}
 }
 function showModal(title,body,wide=false){
@@ -91,6 +92,13 @@ function showModal(title,body,wide=false){
 const input=(title,name,value='',attrs='')=>`<label>${title}<input name="${name}" value="${esc(value)}" ${attrs}></label>`;
 const textarea=(title,name,value='',attrs='')=>`<label class="full-span">${title}<textarea name="${name}" maxlength="6000" ${attrs}>${esc(value)}</textarea></label>`;
 const formButtons=(label='Zapisz')=>`<div class="form-actions full-span"><button type="button" class="outline" data-close>Anuluj</button><button class="primary" type="submit">${label}</button></div><p class="form-error full-span" role="alert"></p>`;
+function wireFootMap(container,{single=false,onSelect}={}){
+ const checks=[...container.querySelectorAll('input[name="zones"]')],dots=[...container.querySelectorAll('[data-zone-pick]')];
+ const sync=()=>{dots.forEach(dot=>dot.classList.toggle('marked',checks.some(c=>c.value===dot.dataset.zonePick&&c.checked)));};
+ for(const dot of dots)dot.onclick=()=>{const check=checks.find(c=>c.value===dot.dataset.zonePick);if(!check)return;if(single)checks.forEach(c=>c.checked=false);check.checked=!check.checked;check.dispatchEvent(new Event('change',{bubbles:true}));};
+ for(const check of checks)check.onchange=()=>{if(single&&check.checked)checks.forEach(c=>{if(c!==check)c.checked=false;});sync();onSelect?.(checks.find(c=>c.checked)?.value||'');};
+ sync();return checks;
+}
 function openRange(day,patient=''){
  range={day:day||selected,first:null,last:null,patient};
  const blocked=blockedCells(range.day,state.appointments);
@@ -117,13 +125,18 @@ function bookingForm(){
  const sel=selection(range.first,range.last,blockedCells(range.day,state.appointments));if(!sel)return toast('Wybierz dostępny zakres.');
  if(!state.patients.length){modal.close();return patientForm();}
  showModal('Nowa wizyta',`<form id="booking-form" class="padded form-grid" data-id="${crypto.randomUUID()}"><div class="notice full-span">${date(range.day)} · <b>${sel.start}–${sel.end}</b> · ${sel.minutes} minut</div><label class="full-span">Pacjent<select name="patient_id" required><option value="">Wybierz pacjenta</option>${state.patients.map(p=>`<option value="${p.id}" ${p.id===range.patient?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label><button type="button" class="text-button full-span" data-book-new-patient>+ Utwórz kartę nowego pacjenta</button><label class="full-span">Zabieg<select name="service_id" required>${state.services.filter(s=>s.active!==false).map(s=>`<option value="${s.id}">${esc(s.name)} · ${s.minutes} min · ${money(s.price)}</option>`).join('')}</select></label><div class="soft-note full-span">Czas wizyty jest zgodny z Twoim zaznaczeniem. Sprawdź, czy wystarczy na wybrany zabieg. Zapis potwierdza wizytę i zleca wiadomość na e-mail z karty pacjenta.</div>${textarea('Notatka organizacyjna (bez danych o zdrowiu)','note')}${formButtons('Zarezerwuj wizytę')}</form>`);
+ if(range.patient){const p=state.patients.find(p=>p.id===range.patient),select=modal.querySelector('[name="patient_id"]');if(p&&select){select.closest('label').hidden=true;modal.querySelector('[data-book-new-patient]').hidden=true;modal.querySelector('#booking-form .notice').insertAdjacentHTML('afterend',`<div class="booking-known-patient full-span"><span class="avatar small">${esc(ui.initials(p.name))}</span><div><small>PACJENT</small><b>${esc(p.name)}</b></div></div>`);}}
  if(state.clinic_profile){
   const service=modal.querySelector('[name="service_id"]');
   for(const opt of service.options){const s=state.services.find(s=>s.id===opt.value);opt.textContent=`${s.name} · ${s.minutes} min · ${priceLabel(s)}`;}
-  service.closest('label').insertAdjacentHTML('afterend',`${input('Uzgodniona kwota wizyty (PLN)','price',state.services.find(s=>s.id===service.value).price/100,'type="number" min="0" max="100000" step="0.01" required')}<p class="fineprint">Kwota robocza z cennika. Przy widełkach wybierz uzgodnioną kwotę; nie doliczamy dodatków samodzielnie.</p><div class="notice full-span" id="booking-recipient"></div>`);
-  const updateRecipient=()=>{const p=state.patients.find(p=>p.id===modal.querySelector('[name="patient_id"]').value),c=p&&contactFor(p);modal.querySelector('#booking-recipient').textContent=c?`Odbiorca powiadomienia: ${c.kind} · ${c.name}${c.email?' · '+c.email:' · brak e-maila (brak wysyłki)'}.${demo?' Demo niczego nie wysyła.':!state.notifications_configured?' Wysyłka jest wyłączona lub nieskonfigurowana.':''}`:'Wybierz pacjenta, aby sprawdzić odbiorcę.';};
-  modal.querySelector('[name="patient_id"]').onchange=updateRecipient;updateRecipient();
+  service.closest('label').insertAdjacentHTML('afterend',`${input('Uzgodniona kwota wizyty (PLN)','price',state.services.find(s=>s.id===service.value).price/100,'type="number" min="0" max="100000" step="0.01" required')}<p class="fineprint">Kwota robocza z cennika. Przy widełkach wybierz uzgodnioną kwotę; nie doliczamy dodatków samodzielnie.</p><label class="full-span" id="booking-case-field" hidden>Terapia / problem<select name="case_id"><option value="">Bez przypisania</option></select></label><div class="booking-area-summary full-span"><button type="button" class="outline" id="booking-area-open">+ Dodaj obszar na stopie</button><span id="booking-area-label">Opcjonalnie · możesz przejść dalej</span></div><section class="booking-area-picker full-span" id="booking-area-picker" hidden><div><span class="eyebrow">OBSZAR WIZYTY</span><h3>Dotknij jednego miejsca</h3><p>Po wyborze mapa sama się zamknie.</p></div>${ui.footMap([],true)}<button type="button" class="text-button" id="booking-area-skip">Pomiń obszar</button></section><div class="notice full-span" id="booking-recipient"></div>`);
+  const patientSelect=modal.querySelector('[name="patient_id"]'),caseField=modal.querySelector('#booking-case-field'),caseSelect=caseField.querySelector('select');
+  const updateContext=()=>{const p=state.patients.find(p=>p.id===patientSelect.value),c=p&&contactFor(p),cases=(state.cases||[]).filter(x=>x.patient_id===p?.id&&x.status==='active').sort((a,b)=>b.created_at.localeCompare(a.created_at));modal.querySelector('#booking-recipient').textContent=c?`Odbiorca powiadomienia: ${c.kind} · ${c.name}${c.email?' · '+c.email:' · brak e-maila (brak wysyłki)'}.${demo?' Demo niczego nie wysyła.':!state.notifications_configured?' Wysyłka jest wyłączona lub nieskonfigurowana.':''}`:'Wybierz pacjenta, aby sprawdzić odbiorcę.';caseSelect.innerHTML='<option value="">Bez przypisania</option>'+cases.map(x=>`<option value="${esc(x.id)}">${esc(x.title)} · ${esc(x.location)}</option>`).join('');if(cases.length===1)caseSelect.value=cases[0].id;caseField.hidden=cases.length<2;};
+  patientSelect.onchange=updateContext;updateContext();
   service.onchange=()=>{modal.querySelector('[name="price"]').value=state.services.find(s=>s.id===service.value).price/100;};
+  const areaPicker=modal.querySelector('#booking-area-picker'),areaLabel=modal.querySelector('#booking-area-label'),areaButton=modal.querySelector('#booking-area-open'),areaChecks=wireFootMap(areaPicker,{single:true,onSelect:value=>{if(!value)return;areaLabel.textContent=value.replace(':',' · ');areaButton.textContent='Zmień obszar';areaPicker.hidden=true;}});
+  areaButton.onclick=()=>{areaPicker.hidden=false;areaPicker.scrollIntoView({behavior:'smooth',block:'center'});};
+  modal.querySelector('#booking-area-skip').onclick=()=>{areaChecks.forEach(c=>c.checked=false);areaLabel.textContent='Bez wskazanego obszaru';areaButton.textContent='+ Dodaj obszar na stopie';areaPicker.hidden=true;};
  }
 }
 function patientForm(id='',returnBooking=false){
@@ -180,10 +193,10 @@ function patientForm(id='',returnBooking=false){
 }
 function encounterForm(patientId,appointmentId='',amendsId='',caseId=''){
  const p=state.patients.find(p=>p.id===patientId),a=state.appointments.find(a=>a.id===appointmentId);if(!p)return;
- showModal(amendsId?'Uzupełnienie dokumentacji':'Dokumentacja wizyty',`<form id="encounter-form" data-id="${crypto.randomUUID()}" data-patient="${patientId}" data-appointment="${appointmentId}" data-amends="${amendsId}" class="padded form-grid"><div class="notice full-span"><b>${esc(p.name)}</b> · ${date(new Date())}<br>${amendsId?'Powstanie nowy wpis powiązany z oryginałem. Oryginalna dokumentacja pozostanie bez zmian.':'Po zapisaniu wpisu nie można go nadpisać. Błędy wyjaśnij uzupełnieniem.'}</div><h3 class="full-span">Lokalizacja obserwacji</h3><div class="full-span">${ui.footMap([],true)}</div>${textarea('Obserwacje i zgłaszane dolegliwości','observations','','required')}${textarea('Wykonane czynności / przebieg zabiegu','performed',amendsId?'Uzupełnienie wpisu: ':'','required')}${textarea('Zastosowane materiały, opatrunki, preparaty, klamry (opcjonalnie seria)','products')}${textarea('Zalecenia przekazane pacjentowi i ustalenia','aftercare','','required')}<label>Ból zgłaszany przez pacjenta<select name="pain"><option value="">Nie oceniono</option>${Array.from({length:11},(_,i)=>`<option value="${i}">${i} / 10</option>`).join('')}</select></label>${input('Planowana kontrola (opcjonalnie)','followup_date','','type="date" min="'+dayKey()+'"')}${!amendsId?input('Kwota wizyty (PLN)','amount',(a?.price||0)/100,'type="number" min="0" max="100000" step="0.01" required')+'<label class="check-label"><input type="checkbox" name="paid"> Wizyta opłacona</label>':''}<div class="safety-note full-span">Rana, podejrzenie zakażenia lub nagły obrzęk / zmiana koloru, szczególnie przy cukrzycy, wymagają odpowiedniej oceny medycznej. Ta karta nie kwalifikuje automatycznie do zabiegu. <a href="https://www.nice.org.uk/guidance/ng19/chapter/Recommendations" target="_blank" rel="noreferrer">Wytyczne NICE ↗</a></div>${formButtons('Zapisz dokumentację')}</form>`,true);
- modal.querySelectorAll('input[name="zones"]').forEach(el=>el.onchange=()=>{const selectedZones=Array.from(modal.querySelectorAll('input[name="zones"]:checked')).map(x=>x.value);modal.querySelectorAll('.foot').forEach((foot,i)=>foot.querySelectorAll('.zone-dot').forEach((dot,j)=>{const value=foot.querySelectorAll('input[name="zones"]')[j].value;dot.classList.toggle('marked',selectedZones.includes(value));}));});
+ showModal(amendsId?'Uzupełnienie dokumentacji':'Dokumentacja wizyty',`<form id="encounter-form" data-id="${crypto.randomUUID()}" data-patient="${patientId}" data-appointment="${appointmentId}" data-amends="${amendsId}" class="padded form-grid"><div class="notice full-span"><b>${esc(p.name)}</b> · ${date(new Date())}<br>${amendsId?'Powstanie nowy wpis powiązany z oryginałem. Oryginalna dokumentacja pozostanie bez zmian.':'Po zapisaniu wpisu nie można go nadpisać. Błędy wyjaśnij uzupełnieniem.'}</div><h3 class="full-span">Lokalizacja obserwacji</h3><div class="full-span">${ui.footMap(a?.zones||[],true)}</div>${textarea('Obserwacje i zgłaszane dolegliwości','observations',a?.live_notes||'','required')}${textarea('Wykonane czynności / przebieg zabiegu','performed',amendsId?'Uzupełnienie wpisu: ':'','required')}${textarea('Zastosowane materiały, opatrunki, preparaty, klamry (opcjonalnie seria)','products')}${textarea('Zalecenia przekazane pacjentowi i ustalenia','aftercare','','required')}<label>Ból zgłaszany przez pacjenta<select name="pain"><option value="">Nie oceniono</option>${Array.from({length:11},(_,i)=>`<option value="${i}">${i} / 10</option>`).join('')}</select></label>${input('Planowana kontrola (opcjonalnie)','followup_date','','type="date" min="'+dayKey()+'"')}${!amendsId?input('Kwota wizyty (PLN)','amount',(a?.price||0)/100,'type="number" min="0" max="100000" step="0.01" required')+'<label class="check-label"><input type="checkbox" name="paid"> Wizyta opłacona</label>':''}<div class="safety-note full-span">Rana, podejrzenie zakażenia lub nagły obrzęk / zmiana koloru, szczególnie przy cukrzycy, wymagają odpowiedniej oceny medycznej. Ta karta nie kwalifikuje automatycznie do zabiegu. <a href="https://www.nice.org.uk/guidance/ng19/chapter/Recommendations" target="_blank" rel="noreferrer">Wytyczne NICE ↗</a></div>${formButtons('Zapisz dokumentację')}</form>`,true);
+ wireFootMap(modal.querySelector('#encounter-form'));
  if(state.clinic_profile){
-  const original=state.encounters.find(v=>v.id===amendsId),chosen=original?.case_id||caseId;
+  const original=state.encounters.find(v=>v.id===amendsId),chosen=original?.case_id||caseId||a?.case_id;
   modal.querySelector('#encounter-form .notice').insertAdjacentHTML('afterend',`<label class="full-span">Problem / terapia<select name="case_id" ${amendsId?'disabled':''}>${clinic.caseOptions(state,patientId,chosen)}</select></label>`);
   if(amendsId)modal.querySelector('#encounter-form').dataset.case=chosen||'';
  }
@@ -191,39 +204,20 @@ function encounterForm(patientId,appointmentId='',amendsId='',caseId=''){
 function caseForm(pid){
  showModal('Nowy problem / terapia',`<form id="case-form" data-id="${crypto.randomUUID()}" data-patient="${pid}" class="padded form-grid">${input('Nazwa problemu, np. kontrole klamry','title','','required maxlength="150"')}<label>Miejsce na stopie<select name="location" required><option value="">Wybierz lokalizację</option>${clinic.locations.map(l=>`<option>${esc(l)}</option>`).join('')}</select></label>${textarea('Cel opieki / plan do kolejnej kontroli','goal')}<p class="fineprint full-span">Każdy niezależny problem ma własną historię. Nazwa służy organizacji dokumentacji, nie jest automatyczną diagnozą.</p>${formButtons('Dodaj problem')}</form>`);
 }
+function rescheduleForm(id){
+ const a=state.appointments.find(a=>a.id===id);if(!a)return;
+ const starts=Array.from({length:24},(_,i)=>clock(480+i*30)),ends=Array.from({length:24},(_,i)=>clock(510+i*30));
+ showModal('Zmień godzinę wizyty',`<form id="reschedule-form" data-id="${a.id}" class="padded form-grid"><div class="booking-known-patient full-span"><span class="avatar small">${esc(ui.initials(a.patient_name))}</span><div><small>PACJENT</small><b>${esc(a.patient_name)}</b><span>${esc(a.service_name)}</span></div></div>${input('Dzień','day',dayKey(a.starts_at),'type="date" min="'+dayKey()+'" required')}<label>Od<select name="start" required>${starts.map(v=>`<option ${v===time(a.starts_at)?'selected':''}>${v}</option>`).join('')}</select></label><label>Do<select name="end" required>${ends.map(v=>`<option ${v===time(a.ends_at)?'selected':''}>${v}</option>`).join('')}</select></label><div class="soft-note full-span">Aplikacja sprawdzi kolizję z innymi wizytami. Historia pacjenta, problem i zdjęcia pozostaną bez zmian.</div>${formButtons('Zapisz nową godzinę')}</form>`);
+}
 function appointmentModal(id){
  const a=state.appointments.find(a=>a.id===id);if(!a)return;
- showModal('Szczegóły wizyty',`<div class="padded"><span class="tag ${a.status}">${{confirmed:'Potwierdzona',completed:'Zakończona',cancelled:'Anulowana'}[a.status]}</span><h2>${esc(a.patient_name)}</h2><h3>${date(a.starts_at)} · ${time(a.starts_at)}–${time(a.ends_at)}</h3><p>${esc(a.service_name)} · ${money(a.price)}</p><p class="muted">Gabinet: ${esc(a.clinic_address||'Uzupełnij adres w ustawieniach')}</p><p>${esc(a.note)}</p><div class="stack"><button class="outline" data-open-patient="${a.patient_id}">Otwórz kartę pacjenta →</button>${a.status==='confirmed'?`<button class="primary" data-document-appointment="${a.id}">Dokumentuj i zakończ wizytę</button><button class="danger" data-cancel-appointment="${a.id}">Anuluj wizytę i zwolnij termin</button>`:''}</div><p class="fineprint">Anulowanie zachowuje historię rezerwacji. Zwalnia godziny i odwołuje oczekujące przypomnienia. Wysłanego e-maila nie można cofnąć.</p></div>`);
+ const c=(state.cases||[]).find(c=>c.id===a.case_id),area=a.zones?.[0];
+ showModal('Szczegóły wizyty',`<div class="padded"><span class="tag ${a.status}">${{confirmed:'Potwierdzona',completed:'Zakończona',cancelled:'Anulowana'}[a.status]}</span><h2>${esc(a.patient_name)}</h2><h3>${date(a.starts_at)} · ${time(a.starts_at)}–${time(a.ends_at)}</h3><p>${esc(a.service_name)} · ${money(a.price)}</p>${c||area?`<p class="notice">${c?esc(c.title)+' · '+esc(c.location):esc(area.replace(':',' · '))}</p>`:''}<p class="muted">Gabinet: ${esc(a.clinic_address||'Uzupełnij adres w ustawieniach')}</p><p>${esc(a.note)}</p><div class="stack"><button class="outline" data-open-patient="${a.patient_id}">Otwórz kartę pacjenta →</button>${a.status==='confirmed'?`<button class="primary" data-open-active="${a.id}">Otwórz aktywną wizytę</button><button class="outline" data-active-reschedule="${a.id}">Zmień godzinę wizyty</button><button class="danger" data-cancel-appointment="${a.id}">Anuluj wizytę i zwolnij termin</button>`:''}</div><p class="fineprint">Anulowanie zachowuje historię rezerwacji. Zwalnia godziny i odwołuje oczekujące przypomnienia. Wysłanego e-maila nie można cofnąć.</p></div>`);
 }
-function ideaForm(){showModal('Nowy pomysł',`<form id="idea-form" class="padded form-grid" data-id="${crypto.randomUUID()}">${input('Tytuł','title','','required maxlength="200"')}${input('Kategoria','category','Pomysł','required maxlength="100"')}${textarea('Treść','content','','required')}${formButtons('Zapisz w Pomysłach')}</form>`);}
 function serviceForm(id){const s=state.services.find(s=>s.id===id)||{name:'',category:'',minutes:30,price:0};showModal('Zabieg podologiczny',`<form id="service-form" data-service="${id||crypto.randomUUID()}" class="padded form-grid">${input('Nazwa','name',s.name,'required maxlength="200"')}${input('Kategoria','category',s.category,'required maxlength="100"')}${input('Czas (minuty, co 30)','minutes',s.minutes,'type="number" min="30" max="720" step="30" required')}${input(state.clinic_profile?'Cena minimalna / stała (PLN)':'Cena (PLN)','price',s.price/100,'type="number" min="0" max="100000" step="0.01" required')}${state.clinic_profile?`<label>Rodzaj ceny<select name="price_kind"><option value="fixed" ${s.price_max===s.price||s.price_max===undefined?'selected':''}>Stała</option><option value="range" ${s.price_max>s.price?'selected':''}>Widełki</option><option value="from" ${s.price_max===null?'selected':''}>Cena od</option></select></label>${input('Cena maksymalna (dla widełek)','price_max',(s.price_max??s.price)/100,'type="number" min="0" max="100000" step="0.01"')}${textarea('Uwagi do ceny / wariantu','price_note',s.price_note)}<label class="check-label full-span"><input name="time_confirmed" type="checkbox" ${s.time_confirmed?'checked':''}> Czas zabiegu potwierdzony przez gabinet</label>`:''}<div class="soft-note full-span">Zmiana cennika nie zmienia cen już zapisanych rezerwacji.</div>${formButtons('Zapisz zabieg')}</form>`);}
-async function saveIdea(){
- if(!lastIdea||advisorPatient)return toast('Najpierw przygotuj ogólny pomysł. Podsumowań pacjentów nie zapisujemy w Pomysłach.');
- const result=await api('idea',{id:lastIdea.id,title:lastIdea.title,content:lastIdea.content,category:'Doradca · pomysł'});
- if(!result.id)throw Error('Nie potwierdzono zapisu.');
- chat.push({role:'assistant',receipt:true,content:demo?'Zapisano pomysł w demonstracyjnej zakładce Pomysły (tylko na czas tej sesji).':'Zapisano w zakładce Pomysły.'});lastIdea=null;await refresh();
-}
-function demoAnswer(message){
- if(advisorPatient){const p=state.patients.find(p=>p.id===advisorPatient),v=state.encounters.filter(v=>v.patient_id===p.id).sort((a,b)=>b.created_at.localeCompare(a.created_at));return {answer:`PRZYKŁAD PODSUMOWANIA — bez użycia modelu AI.\n\nCel wizyty z wywiadu: ${p.profile.complaints||'Nie ustalono.'}\nAlergie zgłaszane: ${p.profile.allergies||'Nie ustalono.'}\nOstatnia dokumentacja: ${v[0]?date(v[0].created_at):'Brak.'}\n\nDo rozmowy: czy od poprzedniej wizyty zmieniły się dolegliwości, leki, alergie lub stan skóry? Uzupełnij nieustalone pola wywiadu. Nie oceniaj bezpieczeństwa zabiegu wyłącznie na podstawie historycznych notatek.`,can_save_idea:false,title:'Przed wizytą'};}
- return {answer:'PRZYKŁAD POMYSŁU — bez użycia modelu AI.\n\nSpokojny powrót na kontrolę\n\nPo każdej wizycie ustal z pacjentem indywidualny termin kontroli i wpisz go w dokumentacji. Raz w tygodniu przejrzyj listę „Kontrole do umówienia”.\n\nPrzygotuj krótką kartę zaleceń w języku zrozumiałym dla pacjenta oraz informację, jak skontaktować się z gabinetem przy zmianie stanu stóp. Nie łącz komunikacji dotyczącej opieki z reklamą bez odpowiedniej zgody.\n\nZacznij od jednego miesiąca. Sprawdź, czy pacjenci wiedzą, co robić po wizycie i jak umówić kontrolę.\n\nW podłączonej wersji możesz swobodnie dopracowywać propozycję w rozmowie.',title:'Spokojny powrót na kontrolę',can_save_idea:true};
-}
-async function sendChat(message,approved=false){
- if(isSaveIdeaCommand(message)){chat.push({role:'user',content:message});return saveIdea();}
- if(advisorPatient&&!approved&&!demo){
-  const p=state.patients.find(p=>p.id===advisorPatient),context=advisorContext(p,state.encounters);
-  showModal('Sprawdź dane przekazywane do AI',`<div class="padded"><p>Poniżej wywiad i wybrane wpisy. Nie ma pól nazwiska, daty urodzenia, telefonu ani e-maila. Tekst może nadal pozwalać na identyfikację. Jeżeli zawiera zbędne dane, anuluj i popraw dokumentację.</p><pre class="context-preview">${esc(JSON.stringify(context,null,2))}</pre><p>Twoje pytanie również zostanie wysłane. Korzystaj tylko zgodnie z przyjętymi zasadami przetwarzania danych w gabinecie.</p><div class="form-actions"><button class="outline" data-close>Anuluj</button><button class="primary" id="approve-context">Przekaż ten kontekst</button></div></div>`,true);
-  modal.querySelector('#approve-context').onclick=async()=>{modal.close();await run(()=>sendChat(message,true));};return;
- }
- const history=chat.filter(m=>!m.receipt).map(m=>({role:m.role,content:m.content}));
- chat.push({role:'user',content:message});render();
- try{
-  const result=demo?demoAnswer(message):await api('advisor',{message,patient_id:advisorPatient||null,context_approved:approved,history});
-  chat.push({role:'assistant',content:result.answer});lastIdea=result.can_save_idea&&!advisorPatient?{id:crypto.randomUUID(),title:result.title,content:result.answer}:null;
- }catch(e){chat.push({role:'assistant',receipt:true,content:`Nie otrzymano odpowiedzi: ${e.message}`});throw e;}finally{render();}
-}
 async function run(fn,form){
  if(busy)return;busy=true;document.body.classList.add('busy');
- const buttons=Array.from(document.querySelectorAll('button[type="submit"], #approve-context, [data-save-idea]'));buttons.forEach(b=>b.disabled=true);
+ const buttons=Array.from(document.querySelectorAll('button[type="submit"]'));buttons.forEach(b=>b.disabled=true);
  try{await fn();}catch(e){const err=form?.querySelector('.form-error');if(err)err.textContent=e.message;toast(e.message);}finally{busy=false;document.body.classList.remove('busy');buttons.forEach(b=>b.disabled=false);}
 }
 document.addEventListener('submit',event=>{
@@ -235,17 +229,24 @@ document.addEventListener('submit',event=>{
    if(!r.ok)throw Error('Nie udało się zalogować. Sprawdź login, hasło i uprawnienia.');
    session={...await r.json(),expires_at:Date.now()+3600000};state=await api();return render();
   }
-  if(f.id==='chat-form')return sendChat(String(d.message).trim());
+  if(f.id==='active-visit-find'){
+   const clean=v=>String(v||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(),wanted=clean(d.surname);
+   const today=state.appointments.filter(a=>a.status==='confirmed'&&dayKey(a.starts_at)===dayKey()),matches=today.filter(a=>clean(state.patients.find(p=>p.id===a.patient_id)?.name.split(/\s+/).at(-1))===wanted);
+   if(matches.length===1){activeAppointmentId=matches[0].id;activeShowChoices=false;}else{activeAppointmentId='';activeShowChoices=true;toast(matches.length?'Wybierz właściwą wizytę z listy.':'Nie znaleziono tego nazwiska. Wybierz pacjenta z listy lub dodaj nowego.');}render();return;
+  }
   if(f.id==='patient-form'){
    const {name,email,phone,birth_date,...profile}=d;action='patient';data={id:f.dataset.id,name,email,phone,birth_date:birth_date||null,profile};validatePatient(data);message='Zapisano kartę pacjenta.';
   }else if(f.id==='booking-form'){
    const sel=selection(range.first,range.last,blockedCells(range.day,state.appointments));if(!sel)throw Error('Zakres przestał być dostępny. Wybierz go ponownie.');
-   action='book';data={...d,id:f.dataset.id,...validateRange(range.day,sel.start,sel.end),...(state.clinic_profile?{price:Math.round(Number(d.price)*100)}:{})};message=demo?'Zapisano wizytę w demo. Nie wysłano e-maila.':'Zapisano wizytę. Status e-maila sprawdzisz w Ustawieniach.';
+   action='book';data={...d,id:f.dataset.id,...validateRange(range.day,sel.start,sel.end),...(state.clinic_profile?{price:Math.round(Number(d.price)*100),case_id:d.case_id||'',zones:d.zones?[d.zones]:[]}:{})};message=demo?'Zapisano wizytę w demo. Nie wysłano e-maila.':'Zapisano wizytę. Status e-maila sprawdzisz w Ustawieniach.';
+  }else if(f.id==='reschedule-form'){
+   action='reschedule';data={id:f.dataset.id,...validateRange(d.day,d.start,d.end)};message='Zmieniono godzinę wizyty.';
+  }else if(f.id==='active-note-form'){
+   action='visit-note';data={id:f.dataset.appointment,live_notes:String(d.live_notes||'')};message='Zapisano spostrzeżenia z wizyty.';
   }else if(f.id==='encounter-form'){
    action='encounter';data={...d,id:f.dataset.id,patient_id:f.dataset.patient,appointment_id:f.dataset.appointment||null,amends_id:f.dataset.amends||null,zones:new FormData(f).getAll('zones'),pain:d.pain===''?null:Number(d.pain),amount:Math.round(Number(d.amount||0)*100),paid:d.paid==='on',followup_date:d.followup_date||null};validateEncounter(data);message='Dokumentacja została zapisana.';
    if(state.clinic_profile)data.case_id=f.dataset.amends?(f.dataset.case||''):(d.case_id||'');
   }else if(f.id==='case-form'){action='case';data={...d,id:f.dataset.id,patient_id:f.dataset.patient};message=demo?'Dodano problem w demo.':'Dodano problem w karcie pacjenta.';
-  }else if(f.id==='idea-form'){action='idea';data={...d,id:f.dataset.id};message='Zapisano pomysł.';
   }else if(f.id==='service-form'){action='service';data={...d,service_id:f.dataset.service,price:Math.round(Number(d.price)*100),minutes:Number(d.minutes)};
    if(state.clinic_profile){data.price_max=d.price_kind==='from'?null:d.price_kind==='range'?Math.round(Number(d.price_max)*100):data.price;data.time_confirmed=d.time_confirmed==='on';if(data.price_max!==null&&data.price_max<data.price)throw Error('Cena maksymalna nie może być niższa od minimalnej.');}
    message='Zapisano zabieg.';
@@ -259,12 +260,18 @@ document.addEventListener('submit',event=>{
 document.addEventListener('click',event=>{
  const b=event.target.closest('button,[data-prompt]');if(!b)return;
  if(b.hasAttribute('data-close'))return modal.close();
- if(b.hasAttribute('data-logout')){session=null;state=null;chat=[];lastIdea=null;pendingPhoto=null;advisorPatient='';for(const x of photoUrls.values())if(x.url?.startsWith('blob:'))URL.revokeObjectURL(x.url);photoUrls.clear();modal.close();if(demo)location.href=location.pathname;else showLogin();return;}
+ if(b.hasAttribute('data-logout')){session=null;state=null;pendingPhoto=null;for(const x of photoUrls.values())if(x.url?.startsWith('blob:'))URL.revokeObjectURL(x.url);photoUrls.clear();modal.close();if(demo)location.href=location.pathname;else showLogin();return;}
  if(b.hasAttribute('data-book'))return openRange(b.dataset.book||selected);
  if(b.dataset.bookPatient)return openRange(selected,b.dataset.bookPatient);
  if(b.dataset.day){selected=b.dataset.day;render();return;}
  if(b.dataset.month){const d=new Date(month+'-01T12:00:00Z');d.setUTCMonth(d.getUTCMonth()+Number(b.dataset.month));month=d.toISOString().slice(0,7);render();return;}
  if(b.hasAttribute('data-today')){selected=dayKey();month=selected.slice(0,7);render();return;}
+ if(b.hasAttribute('data-active-show')){activeShowChoices=true;render();return;}
+ if(b.hasAttribute('data-active-reset')){activeAppointmentId='';activeShowChoices=true;render();return;}
+ if(b.hasAttribute('data-active-new-patient'))return patientForm();
+ if(b.dataset.activeAppointment){activeAppointmentId=b.dataset.activeAppointment;activeShowChoices=false;render();return;}
+ if(b.dataset.openActive){activeAppointmentId=b.dataset.openActive;activeShowChoices=false;modal.close();location.hash='active';render();return;}
+ if(b.dataset.activeReschedule)return rescheduleForm(b.dataset.activeReschedule);
  if(b.dataset.appointment)return appointmentModal(b.dataset.appointment);
  if(b.dataset.openPatient){modal.close();patientTab='overview';location.hash='patient/'+b.dataset.openPatient;return;}
  if(b.dataset.documentAppointment){const a=state.appointments.find(a=>a.id===b.dataset.documentAppointment);return encounterForm(a.patient_id,a.id);}
@@ -282,14 +289,11 @@ document.addEventListener('click',event=>{
  if(b.dataset.encounter)return encounterForm(b.dataset.encounter);
  if(b.dataset.amend){const v=state.encounters.find(v=>v.id===b.dataset.amend);return encounterForm(v.patient_id,'',v.id);}
  if(b.hasAttribute('data-new-service')||b.dataset.service)return serviceForm(b.dataset.service);
- if(b.hasAttribute('data-new-idea'))return ideaForm();
- if(b.dataset.advisorPatient){advisorPatient=b.dataset.advisorPatient;chat=[];lastIdea=null;location.hash='advisor';return;}
- if(b.hasAttribute('data-clear-chat')){chat=[];lastIdea=null;render();return;}
- if(b.dataset.prompt)return run(()=>sendChat(b.dataset.prompt));
- if(b.hasAttribute('data-save-idea'))return run(saveIdea);
  if(b.hasAttribute('data-refresh'))return run(refresh);
  if(b.hasAttribute('data-retry-photo'))return run(async()=>{modal.close();await uploadPendingPhoto();});
- if(b.dataset.photoView)return run(async()=>{photoUrls.delete(b.dataset.photoView);const url=await getPhotoUrl(b.dataset.photoView);showModal('Zdjęcie w karcie pacjenta',`<div class="photo-detail"><img src="${esc(url)}" alt="Dokumentacja stopy"><p>Prywatna dokumentacja · bez automatycznego przekazywania do AI</p></div>`,true);});
+ if(b.hasAttribute('data-cancel-photo')){if(pendingPhoto?.preview_url)URL.revokeObjectURL(pendingPhoto.preview_url);pendingPhoto=null;modal.close();return;}
+ if(b.hasAttribute('data-confirm-photo'))return run(async()=>{applyPhotoAssignmentFromModal();modal.close();await uploadPendingPhoto();});
+ if(b.dataset.photoView)return run(async()=>{photoUrls.delete(b.dataset.photoView);const url=await getPhotoUrl(b.dataset.photoView);showModal('Zdjęcie w karcie pacjenta',`<div class="photo-detail"><img src="${esc(url)}" alt="Dokumentacja stopy"><p>Prywatna dokumentacja pacjenta</p></div>`,true);});
  if(b.hasAttribute('data-compare-open'))return run(async()=>{
   const ids=Array.from(document.querySelectorAll('[data-compare-photo]:checked')).map(x=>x.dataset.comparePhoto),pid=route().split('/')[1]?.split('?')[0];
   if(ids.length!==2)throw Error('Zaznacz dokładnie dwa zdjęcia do porównania.');
@@ -301,24 +305,45 @@ document.addEventListener('click',event=>{
  if(b.hasAttribute('data-install')){if(installPrompt){installPrompt.prompt();installPrompt=null;}else toast('Otwórz aplikację pod adresem HTTPS. W menu przeglądarki wybierz „Zainstaluj” lub „Dodaj do ekranu początkowego”.');}
 });
 document.addEventListener('input',e=>{if(e.target.id==='patient-search'){search=e.target.value;const caret=e.target.selectionStart;document.querySelector('#content').innerHTML=ui.patients(state,search);const input=document.querySelector('#patient-search');input.focus();input.setSelectionRange(caret,caret);}});
-document.addEventListener('change',e=>{if(e.target.id==='advisor-patient'){advisorPatient=e.target.value;chat=[];lastIdea=null;render();}});
 document.addEventListener('change',e=>{
  if(e.target.id==='case-filter'){caseFilter=e.target.value;render();}
- if(e.target.id==='photo-case'){photoCase=e.target.value;photoEncounter='';render();}
- if(e.target.id==='photo-encounter'){photoEncounter=e.target.value;if(photoEncounter)photoCase=state.encounters.find(v=>v.id===photoEncounter)?.case_id||'';render();}
 });
-function photoInputContext(input){const section=input.closest('[data-photo-patient]');return state.clinic_profile?{case_id:section?.querySelector('#photo-case')?.value||'',encounter_id:section?.querySelector('#photo-encounter')?.value||'',phase:section?.querySelector('#photo-phase')?.value||'control',taken_on:section?.querySelector('#photo-date')?.value||dayKey()}:{};}
+function photoInputContext(input){const section=input.closest('[data-photo-patient]'),patientId=input.dataset.photoInput;return state.clinic_profile?suggestPhotoContext(state,patientId,new Date(),{case_id:section?.dataset.photoFilterCase||'',encounter_id:section?.dataset.photoFilterEncounter||''}):{};}
+function photoVisitOptions(pid,context){
+ const now=new Date(),appointments=(state.appointments||[]).filter(a=>a.patient_id===pid&&a.status!=='cancelled'&&new Date(a.starts_at)<=now).sort((a,b)=>b.starts_at.localeCompare(a.starts_at));
+ const linked=new Set(appointments.map(a=>a.id)),encounters=(state.encounters||[]).filter(v=>v.patient_id===pid&&(!v.appointment_id||!linked.has(v.appointment_id))).sort((a,b)=>b.created_at.localeCompare(a.created_at));
+ return `<option value="">Tylko karta pacjenta</option>${appointments.map(a=>`<option value="a:${esc(a.id)}" ${a.id===context.appointment_id?'selected':''}>${date(a.starts_at)} · ${time(a.starts_at)}–${time(a.ends_at)} · ${esc(a.service_name)}</option>`).join('')}${encounters.map(v=>`<option value="e:${esc(v.id)}" ${!context.appointment_id&&v.id===context.encounter_id?'selected':''}>${date(v.created_at)} · ${time(v.created_at)} · dokumentacja wizyty</option>`).join('')}`;
+}
+function contextForPhotoVisit(pid,value,currentCase=''){
+ const [kind,id]=String(value||'').split(':');
+ if(kind==='a'){const a=state.appointments.find(a=>a.id===id&&a.patient_id===pid),v=state.encounters.find(v=>v.appointment_id===id&&v.patient_id===pid);if(!a)return suggestPhotoContext(state,pid);return {patient_id:pid,appointment_id:a.id,encounter_id:v?.id||'',case_id:a.case_id||v?.case_id||currentCase||'',phase:'control',taken_on:dayKey(a.starts_at)};}
+ if(kind==='e'){const v=state.encounters.find(v=>v.id===id&&v.patient_id===pid);if(!v)return suggestPhotoContext(state,pid);return {patient_id:pid,appointment_id:v.appointment_id||'',encounter_id:v.id,case_id:v.case_id||currentCase||'',phase:'control',taken_on:dayKey(v.created_at)};}
+ return {patient_id:pid,appointment_id:'',encounter_id:'',case_id:currentCase||'',phase:'control',taken_on:dayKey()};
+}
+function showPhotoConfirmation(){
+ const d=pendingPhoto,p=state.patients.find(p=>p.id===d?.patient_id);if(!d||!p)return;
+ d.preview_url=d.preview_url||URL.createObjectURL(d.blob);
+ const selected=d.appointment_id?'a:'+d.appointment_id:d.encounter_id?'e:'+d.encounter_id:'';
+ showModal('Potwierdź przypisanie zdjęcia',`<div class="padded photo-confirm"><img src="${esc(d.preview_url)}" alt="Podgląd wybranego zdjęcia"><div class="photo-confirm-details"><span class="eyebrow">PACJENT I WIZYTA</span><h3 id="photo-confirm-patient">${esc(p.name)}</h3><p id="photo-confirm-visit"></p><p id="photo-confirm-case"></p></div><details class="photo-advanced full-span"><summary>Zmień przypisanie</summary><div class="form-grid"><label class="full-span">Wizyta<select id="photo-confirm-visit-select">${photoVisitOptions(p.id,d)}</select></label><label>Problem / terapia<select id="photo-confirm-case-select">${clinic.caseOptions(state,p.id,d.case_id,'Bez przypisanego problemu')}</select></label><label>Data zdjęcia<input type="date" id="photo-confirm-date" value="${esc(d.taken_on)}" max="${dayKey()}"></label></div></details><div class="photo-confirm-question full-span">Czy zapisać zdjęcie z tym przypisaniem?</div><div class="form-actions full-span"><button type="button" class="outline" data-cancel-photo>Anuluj</button><button type="button" class="primary" data-confirm-photo>Tak, zapisz zdjęcie</button></div></div>`,true);
+ const visitSelect=modal.querySelector('#photo-confirm-visit-select'),caseSelect=modal.querySelector('#photo-confirm-case-select'),dateInput=modal.querySelector('#photo-confirm-date');visitSelect.value=selected;
+ const paint=()=>{const context=contextForPhotoVisit(p.id,visitSelect.value,caseSelect.value),a=state.appointments.find(a=>a.id===context.appointment_id),v=state.encounters.find(v=>v.id===context.encounter_id),c=state.cases.find(c=>c.id===caseSelect.value);modal.querySelector('#photo-confirm-visit').innerHTML=a?`<b>${date(a.starts_at)} · ${time(a.starts_at)}–${time(a.ends_at)}</b><br>${esc(a.service_name)}`:v?`<b>${date(v.created_at)} · ${time(v.created_at)}</b><br>Udokumentowana wizyta`:'<b>Bez konkretnej wizyty</b><br>Zdjęcie pozostanie w karcie pacjenta.';modal.querySelector('#photo-confirm-case').innerHTML=c?`Terapia: <b>${esc(c.title)}</b> · ${esc(c.location)}`:'Problem: <b>bez przypisania</b>';};
+ visitSelect.onchange=()=>{const context=contextForPhotoVisit(p.id,visitSelect.value,caseSelect.value);caseSelect.value=context.case_id||'';dateInput.value=context.taken_on;paint();};caseSelect.onchange=paint;paint();
+}
+function applyPhotoAssignmentFromModal(){
+ if(!pendingPhoto)throw Error('Brak zdjęcia do zapisania.');const visit=modal.querySelector('#photo-confirm-visit-select'),caseSelect=modal.querySelector('#photo-confirm-case-select'),dateInput=modal.querySelector('#photo-confirm-date');
+ const context=contextForPhotoVisit(pendingPhoto.patient_id,visit?.value||'',caseSelect?.value||'');context.case_id=caseSelect?.value||context.case_id||'';context.taken_on=dateInput?.value||context.taken_on;validateLinks(state,pendingPhoto.patient_id,context.case_id,context.encounter_id,context.appointment_id);if(!/^\d{4}-\d{2}-\d{2}$/.test(context.taken_on)||context.taken_on>dayKey())throw Error('Sprawdź datę wykonania zdjęcia.');Object.assign(pendingPhoto,context);
+}
 document.addEventListener('click',e=>{if(e.target.dataset.photoInput)e.target.photoContext=photoInputContext(e.target);},true);
 document.addEventListener('change',e=>{const patientId=e.target.dataset.photoInput;if(!patientId)return;const file=e.target.files?.[0];if(!file)return;const id=crypto.randomUUID();
  // Snapshot wykonany przy otwarciu aparatu; fallback obsługuje także testowe setInputFiles.
  const context=e.target.photoContext||photoInputContext(e.target);delete e.target.photoContext;
- e.target.value='';run(async()=>{if(state.clinic_profile){validateLinks(state,patientId,context.case_id,context.encounter_id);if(!/^\d{4}-\d{2}-\d{2}$/.test(context.taken_on)||context.taken_on>dayKey())throw Error('Sprawdź datę wykonania zdjęcia.');}const photo=await compressPhoto(file);pendingPhoto={...photo,id,patient_id:patientId,...context};await uploadPendingPhoto();});});
+ e.target.value='';run(async()=>{if(state.clinic_profile){validateLinks(state,patientId,context.case_id,context.encounter_id,context.appointment_id);if(!/^\d{4}-\d{2}-\d{2}$/.test(context.taken_on)||context.taken_on>dayKey())throw Error('Sprawdź datę wykonania zdjęcia.');}const photo=await compressPhoto(file);pendingPhoto={...photo,id,patient_id:patientId,...context};showPhotoConfirmation();});});
 function resetRouteFilters(){const tab=new URLSearchParams(route().split('?')[1]||'').get('tab');patientTab=['cases','photos','history','profile'].includes(tab)?tab:'overview';caseFilter='';photoCase='';photoEncounter='';}
 window.addEventListener('hashchange',()=>{resetRouteFilters();render();window.scrollTo(0,0);});
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;});
 modal.addEventListener('click',e=>{if(e.target===modal){const r=modal.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)modal.close();}});
 function showLogin(error=''){
- root.innerHTML=`<main class="login"><section class="login-art"><div class="brand"><img class="clinic-logo" src="assets/podo-profilaktyka-logo.png" alt="Podo-Profilaktyka"></div><h1>Uważna opieka.<br>Dobrze zorganizowany gabinet.</h1><p>Terminarz, karta pacjenta i dokumentacja zabiegów podologicznych w jednym miejscu.</p>${ui.footMap(['L:Przodostopie'])}</section><section class="login-form panel"><span class="eyebrow">STREFA PERSONELU</span><h2>Witaj w swoim gabinecie</h2>${config?.url&&config?.key?`<form id="login-form">${input('E-mail','email','','type="email" autocomplete="username" required')}${input('Hasło','password','','type="password" autocomplete="current-password" required')}<button type="submit" class="primary full">Zaloguj się</button><p class="form-error" role="alert">${esc(error)}</p></form>`:'<p>Ta kopia czeka na podłączenie osobnej bazy Supabase. Możesz już sprawdzić działający podgląd.</p>'}<a class="outline full" href="?demo=1#dashboard">Otwórz demo z fikcyjnymi pacjentami →</a><p class="fineprint">Demo nie służy do przechowywania prawdziwych danych. Nie wysyła wiadomości i nie wywołuje AI.</p></section></main>`;
+ root.innerHTML=`<main class="login"><section class="login-art"><div class="brand"><img class="clinic-logo" src="assets/podo-profilaktyka-logo.png" alt="Podo-Profilaktyka"></div><h1>Uważna opieka.<br>Dobrze zorganizowany gabinet.</h1><p>Terminarz, karta pacjenta i dokumentacja zabiegów podologicznych w jednym miejscu.</p>${ui.footMap(['L:Przodostopie'])}</section><section class="login-form panel"><span class="eyebrow">STREFA PERSONELU</span><h2>Witaj w swoim gabinecie</h2>${config?.url&&config?.key?`<form id="login-form">${input('E-mail','email','','type="email" autocomplete="username" required')}${input('Hasło','password','','type="password" autocomplete="current-password" required')}<button type="submit" class="primary full">Zaloguj się</button><p class="form-error" role="alert">${esc(error)}</p></form>`:'<p>Ta kopia czeka na podłączenie osobnej bazy Supabase. Możesz już sprawdzić działający podgląd.</p>'}<a class="outline full" href="?demo=1#dashboard">Otwórz demo z fikcyjnymi pacjentami →</a><p class="fineprint">Demo nie służy do przechowywania prawdziwych danych i nie wysyła wiadomości.</p></section></main>`;
 }
 async function boot(){
  if(demo){state=new URLSearchParams(location.search).get('generic')==='1'?seed():personalizeDemo(seed());resetRouteFilters();render();}else{try{const r=await fetch('/.netlify/functions/podo-api?config=1');config=await r.json();}catch{config={};}showLogin();}

@@ -65,10 +65,27 @@ export function validateClinicPatient(p){
  return p;
 }
 export const contactFor=p=>(isMinor(p)||p.profile?.contact_target==='guardian')?{name:p.profile.guardian_name,email:p.profile.guardian_email||'',phone:p.profile.guardian_phone||'',kind:'opiekun'}:{name:p.name,email:p.email||'',phone:p.phone||'',kind:'pacjent'};
-export function validateLinks(state,pid,caseId='',encounterId=''){
+export function validateLinks(state,pid,caseId='',encounterId='',appointmentId=''){
  if(!state.patients.some(p=>p.id===pid))throw Error('Nie znaleziono pacjenta.');
  if(caseId&&!state.cases?.some(c=>c.id===caseId&&c.patient_id===pid))throw Error('Problem musi należeć do tego pacjenta.');
  if(encounterId){const v=state.encounters.find(v=>v.id===encounterId&&v.patient_id===pid);if(!v)throw Error('Wizyta musi należeć do tego pacjenta.');if((v.case_id||'')!==(caseId||''))throw Error('Wybrana wizyta dotyczy innego problemu.');}
+ if(appointmentId){const a=state.appointments.find(a=>a.id===appointmentId&&a.patient_id===pid);if(!a)throw Error('Termin musi należeć do tego pacjenta.');if(a.case_id&&(a.case_id||'')!==(caseId||''))throw Error('Wybrany termin dotyczy innego problemu.');}
+}
+const distanceToAppointment=(a,now)=>{const n=now.getTime(),start=new Date(a.starts_at).getTime(),end=new Date(a.ends_at).getTime();return n<start?start-n:n>end?n-end:0;};
+export function suggestPhotoContext(state,pid,now=new Date(),preferred={}){
+ const patient=state.patients.find(p=>p.id===pid);if(!patient)throw Error('Nie znaleziono pacjenta.');
+ const appointments=(state.appointments||[]).filter(a=>a.patient_id===pid&&a.status!=='cancelled');
+ const encounters=(state.encounters||[]).filter(v=>v.patient_id===pid);
+ const preferredEncounter=preferred.encounter_id&&encounters.find(v=>v.id===preferred.encounter_id);
+ const preferredAppointment=preferred.appointment_id&&appointments.find(a=>a.id===preferred.appointment_id);
+ const current=appointments.filter(a=>new Date(a.starts_at)<=now&&new Date(a.ends_at)>=now).sort((a,b)=>a.starts_at.localeCompare(b.starts_at))[0];
+ const sameDay=appointments.filter(a=>dayKey(a.starts_at)===dayKey(now)).sort((a,b)=>distanceToAppointment(a,now)-distanceToAppointment(b,now))[0];
+ const last=appointments.filter(a=>new Date(a.starts_at)<=now).sort((a,b)=>b.starts_at.localeCompare(a.starts_at))[0];
+ const appointment=preferredAppointment||(preferredEncounter?.appointment_id&&appointments.find(a=>a.id===preferredEncounter.appointment_id))||current||sameDay||last||null;
+ const encounter=preferredEncounter||encounters.find(v=>v.appointment_id&&v.appointment_id===appointment?.id)||(!appointment&&encounters.sort((a,b)=>b.created_at.localeCompare(a.created_at))[0])||null;
+ const activeCases=(state.cases||[]).filter(c=>c.patient_id===pid&&c.status==='active').sort((a,b)=>b.created_at.localeCompare(a.created_at));
+ const caseId=preferred.case_id||encounter?.case_id||appointment?.case_id||(activeCases.length===1?activeCases[0].id:'');
+ return {patient_id:pid,case_id:caseId||'',encounter_id:encounter?.id||'',appointment_id:appointment?.id||'',phase:'control',taken_on:appointment?dayKey(appointment.starts_at):encounter?dayKey(encounter.created_at):dayKey(now)};
 }
 export function clinicAction(state,action,data){
  if(!state.clinic_demo)throw Error('Rozszerzenie dostępne tylko w dopasowanym demo.');
@@ -100,6 +117,6 @@ export function personalizeDemo(state){
   {id:'demo-before',patient_id:'p2',case_id:'c2',encounter_id:'v2',phase:'before',taken_on:old,created_at:old+'T12:00:00Z',url:'assets/demo-foot-before.svg',illustration:true},
   {id:'demo-control',patient_id:'p2',case_id:'c2',encounter_id:'v3',phase:'control',taken_on:recent,created_at:recent+'T12:00:00Z',url:'assets/demo-foot-control.svg',illustration:true}
  ];
- for(const a of state.appointments){const s=state.services.find(s=>s.id===a.service_id);Object.assign(a,{clinic_name:CLINIC.name,clinic_address:CLINIC.address,service_name:s?.name||a.service_name,price:s?.price||a.price});}
+ for(const a of state.appointments){const s=state.services.find(s=>s.id===a.service_id),caseId=a.patient_id==='p1'?'c1':a.patient_id==='p2'?'c2':a.patient_id==='p4'?'c3':'';Object.assign(a,{clinic_name:CLINIC.name,clinic_address:CLINIC.address,service_name:s?.name||a.service_name,price:s?.price||a.price,case_id:caseId});}
  return state;
 }
