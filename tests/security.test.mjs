@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {handler} from '../netlify/functions/podo-api.js';
 import {validateOrigin} from '../netlify/lib/backend.js';
-import {shell,dashboard,patients,patient,calendar,services,finance,ideas,advisor,settings} from '../assets/ui.js';
+import {shell,dashboard,activeVisit,patients,patient,calendar,services,finance,settings} from '../assets/ui.js';
 import {seed} from '../assets/demo.js';
 import {dayKey} from '../assets/domain.js';
 test('wszystkie widoki renderują się bez brakujących symboli',()=>{
- const s=seed();for(const fn of [()=>shell('dashboard',true,s.settings),()=>dashboard(s),()=>patients(s),()=>patient(s,'p1'),()=>patient(s,'p1','history'),()=>patient(s,'p1','profile'),()=>patient(s,'p1','photos'),()=>calendar(s,dayKey(),dayKey().slice(0,7)),()=>services(s),()=>finance(s),()=>ideas(s),()=>advisor(s,[],'',true,null),()=>settings(s,true)])assert(fn().length>50);
+ const s=seed();for(const fn of [()=>shell('dashboard',true,s.settings),()=>dashboard(s),()=>activeVisit(s),()=>activeVisit(s,'a1'),()=>patients(s),()=>patient(s,'p1'),()=>patient(s,'p1','history'),()=>patient(s,'p1','profile'),()=>patient(s,'p1','photos'),()=>calendar(s,dayKey(),dayKey().slice(0,7)),()=>services(s),()=>finance(s),()=>settings(s,true)])assert(fn().length>50);
 });
-test('każda prywatna ścieżka API wymaga JWT, także zdjęcia i AI',async()=>{
+test('każda prywatna ścieżka API wymaga JWT, także zdjęcia',async()=>{
  const previous=global.fetch;let called=false;global.fetch=()=>{called=true;throw Error('Nie wolno wywołać bazy bez JWT');};
- try{for(const action of ['book','patient','encounter','advisor','photo','photo-url','idea']){const r=await handler({httpMethod:'POST',headers:{},body:JSON.stringify({action,data:{}})});assert.equal(r.statusCode,401,action);}const r=await handler({httpMethod:'GET',headers:{}});assert.equal(r.statusCode,401);assert.equal(called,false);}finally{global.fetch=previous;}
+ try{for(const action of ['book','patient','encounter','photo','photo-url']){const r=await handler({httpMethod:'POST',headers:{},body:JSON.stringify({action,data:{}})});assert.equal(r.statusCode,401,action);}const r=await handler({httpMethod:'GET',headers:{}});assert.equal(r.statusCode,401);assert.equal(called,false);}finally{global.fetch=previous;}
 });
 test('publiczna konfiguracja nie ujawnia klucza serwerowego',async()=>{
  const previous=process.env.SUPABASE_SERVICE_ROLE_KEY;process.env.SUPABASE_SERVICE_ROLE_KEY='PRIVATE-SERVICE-KEY';

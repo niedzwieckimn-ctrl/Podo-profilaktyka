@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {seed,demoAction} from '../assets/demo.js';
-import {personalizeDemo,CLINIC,CLINIC_SERVICES,clinicAction,isMinor,validateClinicPatient,contactFor,validateLinks,priceLabel} from '../assets/clinic-profile.js';
+import {personalizeDemo,CLINIC,CLINIC_SERVICES,clinicAction,isMinor,validateClinicPatient,contactFor,validateLinks,priceLabel,suggestPhotoContext} from '../assets/clinic-profile.js';
 import {casePanel,guardianCard,clinicServices,clinicPhotoSection,guardianFields} from '../assets/clinic-ui.js';
-import {advisorContext} from '../assets/domain.js';
 test('profil gabinetu nie zmienia ogólnego seeda ani backendu',()=>{
  const s=personalizeDemo(seed());assert.equal(s.settings.name,'Podo-Profilaktyka');assert.equal(s.settings.phone,'+48 664 010 384');assert.equal(seed().services.length,9);assert.equal(seed().cases,undefined);assert.equal(s.services.length,37);assert.equal(new Set(s.services.map(s=>s.id)).size,37);
  for(const a of s.appointments)assert.equal(a.clinic_address,CLINIC.address);
@@ -31,11 +30,13 @@ test('nowy problem jest idempotentny, zamknięcie zachowuje wizyty i zdjęcia',(
  const before=JSON.stringify([s.encounters,s.photos]);clinicAction(s,'case-status',{id:'c2',patient_id:'p2',status:'closed'});assert.equal(JSON.stringify([s.encounters,s.photos]),before);assert.equal(s.cases.find(c=>c.id==='c2').status_history.length,1);
  assert.throws(()=>clinicAction(s,'case-status',{id:'c2',patient_id:'p1',status:'closed'}));assert.throws(()=>clinicAction(seed(),'case',d));
 });
-test('dane opiekuna nie trafiają do kontekstu AI',()=>{
- const s=personalizeDemo(seed()),p=s.patients.find(p=>p.id==='p4'),text=JSON.stringify(advisorContext(p,s.encounters));assert(!text.includes('Marta'));assert(!text.includes('guardian'));assert(!text.includes('example.invalid'));assert(!text.includes('child_comfort'));
-});
 test('widoki kliniki renderują i escapują dane; galerie filtrowane po pacjencie i wizycie',()=>{
  const s=personalizeDemo(seed());for(const html of [casePanel(s,'p2'),guardianCard(s.patients[3]),guardianFields(s.patients[3]),clinicServices(s),clinicPhotoSection(s,'p2')])assert(html.length>100);
  assert(!clinicPhotoSection(s,'p1').includes('data-photo="demo-before"'));assert(clinicPhotoSection(s,'p2','c2','v2').includes('data-photo="demo-before"'));assert(!clinicPhotoSection(s,'p2','c2','v2').includes('data-photo="demo-control"'));
  s.cases[1].title='<img src=x onerror=alert(1)>';assert(casePanel(s,'p2').includes('&lt;img'));assert(!casePanel(s,'p2').includes('<img src=x'));
+});
+test('zdjęcie automatycznie wybiera bieżącą wizytę i nie przechodzi do innego pacjenta',()=>{
+ const s=personalizeDemo(seed()),now=new Date(s.appointments.find(a=>a.id==='a2').starts_at);now.setMinutes(now.getMinutes()+5);
+ const d=suggestPhotoContext(s,'p2',now);assert.equal(d.appointment_id,'a2');assert.equal(d.patient_id,'p2');assert.equal(d.case_id,'c2');
+ assert.throws(()=>validateLinks(s,'p1',d.case_id,d.encounter_id,d.appointment_id));
 });

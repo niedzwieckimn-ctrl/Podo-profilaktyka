@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {selection,instant,validateRange,dayKey,time,shiftDay,overlaps,blockedCells,advisorContext,redact,isSaveIdeaCommand,validateEncounter} from '../assets/domain.js';
+import {selection,instant,validateRange,dayKey,time,shiftDay,overlaps,blockedCells,validateEncounter} from '../assets/domain.js';
 import {seed,demoAction} from '../assets/demo.js';
 import {emailContent} from '../netlify/lib/mail.js';
 test('zaznaczenie tworzy jeden zakres, również przeciągany wstecz',()=>{
@@ -14,11 +14,6 @@ test('czas Warszawy: lato, zima i zmiany czasu',()=>{
 });
 test('rezerwacje są półotwarte: sąsiednie godziny nie kolidują',()=>{const a={...validateRange('2028-01-01','10:00','11:00'),status:'confirmed'};assert.equal(overlaps(a,validateRange('2028-01-01','11:00','12:00')),false);assert.equal(overlaps(a,validateRange('2028-01-01','10:30','11:30')),true);assert.equal(overlaps({...a,status:'cancelled'},a),false);});
 test('komórki kalendarza blokują przeszłość i aktywne wizyty',()=>{const a={...validateRange('2028-01-01','10:00','11:00'),status:'confirmed'};const cells=blockedCells('2028-01-01',[a],new Date(instant('2028-01-01','09:00')));assert.equal(cells[0],true);assert.equal(cells[3],false);assert.equal(cells[4],true);assert.equal(cells[6],false);});
-test('prywatność: kontekst AI bez kontaktu, nazwiska, daty urodzenia i notatek relacyjnych',()=>{
- const s=seed(),p=s.patients[0];p.email='anna@example.com';p.profile.complaints='Anna Nowak, anna@example.com, +48 123 456 789';
- const text=JSON.stringify(advisorContext(p,s.encounters));assert(!text.includes('Anna'));assert(!text.includes('Nowak'));assert(!text.includes('anna@example'));assert(!text.includes('1983'));assert(!text.includes('spacery'));assert(!text.includes('123 456'));assert(text.includes('diabetes'));
-});
-test('jawny zapis pomysłów nie jest ograniczony do receptur',()=>{for(const t of ['zapisz','zapisz to w pomysłach','zapisz jako pomysł rozwoju','dodaj ten pomysł'])assert(isSaveIdeaCommand(t),t);for(const t of ['napisz pomysł','nie zapisuj','zapisz dane pacjenta','dodaj rezerwację'])assert(!isSaveIdeaCommand(t),t);});
 test('dokumentacja wymaga treści i poprawnej skali bólu',()=>{assert.throws(()=>validateEncounter({}));assert.throws(()=>validateEncounter({observations:'x',performed:'x',aftercare:'x',pain:11}));assert.doesNotThrow(()=>validateEncounter({observations:'x',performed:'x',aftercare:'x',pain:null}));});
 test('demo: anulowanie zwalnia zakres, powtórzenie rezerwacji jest idempotentne',()=>{
  const s=seed(),d={id:crypto.randomUUID(),patient_id:'p1',service_id:'basic',...validateRange(shiftDay(dayKey(),7),'10:00','11:00')};demoAction(s,'book',d);demoAction(s,'book',d);assert.equal(s.appointments.filter(a=>a.id===d.id).length,1);assert.throws(()=>demoAction(s,'book',{...d,id:crypto.randomUUID()}));demoAction(s,'cancel',{id:d.id});assert.doesNotThrow(()=>demoAction(s,'book',{...d,id:crypto.randomUUID()}));

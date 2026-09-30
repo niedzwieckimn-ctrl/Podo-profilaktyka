@@ -4,13 +4,15 @@ import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 import {validateRange} from '../assets/domain.js';
 
-test('panel personelu: migracje 001–004 i trwały zapis rozszerzeń',async t=>{
+test('panel personelu: migracje 001–005 i prosty tryb aktywnej wizyty',async t=>{
  const pg=new PGlite();
  await pg.exec('create role anon;create role authenticated;create role service_role;create schema auth;create table auth.users(id uuid primary key);create schema storage;create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);');
- for(const name of ['001_podocare.sql','002_patient_photos.sql','003_staff_clinic.sql','004_clinic_setup.sql'])await pg.exec(await readFile(new URL('../supabase/'+name,import.meta.url),'utf8'));
+ for(const name of ['001_podocare.sql','002_patient_photos.sql','003_staff_clinic.sql','004_clinic_setup.sql','005_simple_visit_workflow.sql'])await pg.exec(await readFile(new URL('../supabase/'+name,import.meta.url),'utf8'));
  const actor=crypto.randomUUID(),outsider=crypto.randomUUID(),pid=crypto.randomUUID(),pid2=crypto.randomUUID(),cid=crypto.randomUUID(),cid2=crypto.randomUUID(),eid=crypto.randomUUID();
  await pg.query('insert into auth.users values($1),($2)',[actor,outsider]);await pg.query('insert into podo_admins values($1)',[actor]);
- const action=async(a,d,u=actor)=>(await pg.query('select podo_action($1,$2::jsonb,$3) result',[a,JSON.stringify(d),u])).rows[0].result;
+ const action=async(a,d,u=actor)=>a==='book'?(await pg.query('select podo_book($1::jsonb,$2) result',[JSON.stringify(d),u])).rows[0].result:(await pg.query('select podo_action($1,$2::jsonb,$3) result',[a,JSON.stringify(d),u])).rows[0].result;
+ const reschedule=async(d,u=actor)=>(await pg.query('select podo_reschedule($1::jsonb,$2) result',[JSON.stringify(d),u])).rows[0].result;
+ const visitNote=async(d,u=actor)=>(await pg.query('select podo_visit_note($1::jsonb,$2) result',[JSON.stringify(d),u])).rows[0].result;
  const child={id:pid,name:'Test dziecko',birth_date:'2020-02-10',email:'dziecko@example.invalid',profile:{guardian_name:'Opiekun Test',guardian_relation:'matka',guardian_email:'opiekun@example.invalid',allergies:'Testowa informacja'}};
  await t.test('start nie tworzy fikcyjnych pacjentów ani kont i ustawia 37 usług',async()=>{
   assert.equal((await pg.query('select count(*)::int n from podo_patients')).rows[0].n,0);
@@ -41,23 +43,31 @@ test('panel personelu: migracje 001–004 i trwały zapis rozszerzeń',async t=>
   await assert.rejects(action('case',{...c,patient_id:pid2}),/Konflikt/);
   await action('case',{...c,id:cid2,patient_id:pid2});
  });
+ await t.test('kolejna wizyta zapamiętuje terapię i jeden obszar, a aktywną wizytę można przesunąć i notować',async()=>{
+  const id=crypto.randomUUID(),linked={...booking,id,case_id:cid,zones:['L:Pięta'],...validateRange('2036-09-30','10:00','11:00')};
+  await action('book',linked);let a=(await pg.query('select * from podo_appointments where id=$1',[id])).rows[0];assert.equal(a.case_id,cid);assert.deepEqual(a.zones,['L:Pięta']);
+  await visitNote({id,live_notes:'Nowa obserwacja w trakcie wizyty'});assert.equal((await pg.query('select live_notes from podo_appointments where id=$1',[id])).rows[0].live_notes,'Nowa obserwacja w trakcie wizyty');
+  const moved=validateRange('2036-09-30','11:00','12:00');await reschedule({id,...moved});a=(await pg.query('select * from podo_appointments where id=$1',[id])).rows[0];assert.equal(a.starts_at.toISOString(),moved.starts_at);assert.equal(a.case_id,cid);assert.deepEqual(a.zones,['L:Pięta']);
+  await assert.rejects(action('book',{...linked,id:crypto.randomUUID(),zones:['L:Pięta','P:Pięta'],...validateRange('2036-10-01','10:00','11:00')}),/najwyżej jeden/);
+  await assert.rejects(reschedule({id,...validateRange('2036-09-28','10:00','11:00')}),/zajęty/);
+ });
  const encounter={id:eid,patient_id:pid,case_id:cid,appointment_id:bid,observations:'Test',performed:'Test kontroli',aftercare:'Test zaleceń',pain:0,amount:19900,paid:true};
  await t.test('dokumentacja nie może wejść do problemu innego pacjenta',async()=>{
   await assert.rejects(action('encounter',{...encounter,case_id:cid2}),/tego pacjenta/);
   assert.equal((await pg.query('select status from podo_appointments')).rows[0].status,'confirmed');
   await action('encounter',encounter);assert.equal((await pg.query('select case_id from podo_encounters')).rows[0].case_id,cid);
-  assert.equal((await pg.query("select state from podo_mail where kind='reminder'")).rows[0].state,'cancelled');
+  assert.equal((await pg.query("select state from podo_mail where kind='reminder' and appointment_id=$1",[bid])).rows[0].state,'cancelled');
  });
  await t.test('uzupełnienie zachowuje pacjenta, problem i niezmienność historii',async()=>{
   await assert.rejects(action('encounter',{...encounter,id:crypto.randomUUID(),appointment_id:null,amends_id:eid,case_id:null}),/uzupełnienie/);
   await action('encounter',{...encounter,id:crypto.randomUUID(),appointment_id:null,amends_id:eid,amount:0});
   await assert.rejects(pg.query("update podo_encounters set aftercare='zmiana'"),/niezmienne/);
  });
- const photoId=crypto.randomUUID(),photo={id:photoId,patient_id:pid,case_id:cid,encounter_id:eid,phase:'before',taken_on:'2026-01-01',storage_path:`${pid}/${photoId}.jpg`,sha256:'a'.repeat(64),width:100,height:100};
+ const photoId=crypto.randomUUID(),photo={id:photoId,patient_id:pid,case_id:cid,encounter_id:eid,appointment_id:bid,phase:'before',taken_on:'2026-01-01',storage_path:`${pid}/${photoId}.jpg`,sha256:'a'.repeat(64),width:100,height:100};
  const savePhoto=async(d,u=actor)=>(await pg.query('select podo_add_photo($1::jsonb,$2) result',[JSON.stringify(d),u])).rows[0].result;
  await t.test('zdjęcie trwale zachowuje problem, wizytę, etap i datę',async()=>{
   await savePhoto(photo);assert.equal((await savePhoto(photo)).reused,true);
-  const p=(await pg.query('select * from podo_photos')).rows[0];assert.equal(p.case_id,cid);assert.equal(p.encounter_id,eid);assert.equal(p.phase,'before');assert.equal(p.taken_on.getUTCFullYear(),2026);
+  const p=(await pg.query('select * from podo_photos')).rows[0];assert.equal(p.case_id,cid);assert.equal(p.encounter_id,eid);assert.equal(p.appointment_id,bid);assert.equal(p.phase,'before');assert.equal(p.taken_on.getUTCFullYear(),2026);
   await assert.rejects(savePhoto({...photo,phase:'after'}),/Konflikt/);
   await assert.rejects(pg.query("update podo_photos set phase='after'"),/niezmienne/);
  });
