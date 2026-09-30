@@ -1,4 +1,4 @@
-# Podo-Profilaktyka · panel personelu · wersja 2.0
+# Podo-Profilaktyka · panel personelu · wersja 2.1
 
 Paczka źródłowa do nowego repozytorium GitHub i wdrożenia na Netlify z osobnym projektem Supabase oraz Resend. **Nie zawiera panelu pacjenta ani publicznego formularza rezerwacji.** Wizytę tworzy zalogowany pracownik; pacjent lub opiekun może otrzymać powiadomienie e-mail.
 
@@ -9,7 +9,7 @@ To osobna aplikacja. Nie podmieniaj repozytorium, projektu Supabase ani ustawie�
 Otwórz **WDROZENIE.md** — instrukcja krok po kroku. W archiwum jest kompletny kod, nie tylko poprawki i nie samo demo.
 
 1. GitHub: cała zawartość rozpakowanego katalogu w głównym katalogu nowego repozytorium, jednym commitem.
-2. Supabase: nowy pusty projekt; uruchom `supabase/INSTALL-FRESH.sql` z paczki. Ten plik łączy migracje 001–004 w jedną transakcję. Nie uruchamiaj potem tych samych migracji drugi raz.
+2. Supabase: nowy pusty projekt; uruchom `supabase/INSTALL-FRESH.sql` z paczki. Ten plik łączy migracje 001–005 w jedną transakcję. Nie uruchamiaj potem tych samych migracji drugi raz.
 3. Utwórz konto personelu w Auth i nadaj dostęp w `podo_admins`; wyłącz publiczną rejestrację.
 4. Netlify: import nowego repozytorium, zmienne według WDROZENIE.md. Resend: domena nadawcy i klucz.
 5. Sprawdź całość na fikcyjnych danych i własnym adresie e-mail, zanim zaczniesz prowadzić prawdziwą dokumentację.
@@ -19,13 +19,15 @@ Wysyłka jest domyślnie wyłączona. Musi być jawnie włączona zmienną `EMAI
 ## Zakres aplikacji
 
 - Terminarz jednego specjalisty: 08:00–20:00, krok 30 minut, przeciąganie myszką lub palcem tworzy jedną wizytę.
+- „Aktywna wizyta”: wpisanie nazwiska lub wybór jednej z trzech najbliższych wizyt otwiera od razu historię, wcześniejsze zdjęcia, notatkę roboczą i dokumentację. Z tego miejsca można przesunąć godzinę albo ustalić kolejny termin bez ponownego wybierania pacjenta.
 - Dorośli i dzieci: wywiad, alergie, leki, ryzyka podologiczne, obciążenie stóp, komfort i dobrowolna notatka do rozmowy.
+- Nowa karta pacjenta działa jako prosty kreator: na ekranie jest jeden krótki etap, opcjonalne pola można przejść przyciskiem „Dalej”, a po wymaganych danych kartę można od razu zapisać i uzupełnić później. Schemat bazy nie został przez to rozszerzony.
 - Osobne dane opiekuna. Przy małoletnim kontakt opiekuna nie jest zastępowany adresem dziecka.
 - Problemy i terapie: lokalizacja na stopie, kolejne kontrole i historia zmian statusu.
 - Dokumentacja wizyty z kopią wywiadu. Bez nadpisywania starych wpisów; błąd wyjaśnia nowe uzupełnienie.
-- Prywatne zdjęcia przypisane do pacjenta, problemu, wizyty, etapu i daty. Porównanie dwóch zdjęć tego samego problemu obok siebie, bez analizy AI.
+- Prywatne zdjęcia: aplikacja proponuje pacjenta i aktualną lub ostatnią wizytę na podstawie otwartej karty oraz czasu. Personel tylko potwierdza przypisanie; ręczna zmiana kontekstu jest schowana pod „Zmień przypisanie”. Porównanie dwóch zdjęć tego samego problemu działa bez automatycznej analizy.
 - 37 pozycji i wariantów cennika gabinetu, widełki / cena od, uzgodniona cena konkretnej rezerwacji.
-- Rozliczenia pomocnicze wizyt, Pomysły i opcjonalny pisemny Doradca AI.
+- Zabiegi/cennik oraz pomocnicze rozliczenia są w Ustawieniach, aby codzienne menu pozostało krótkie.
 - E-maile: potwierdzenie, anulowanie, przypomnienie; bez rozpoznań, nazwy zabiegu, notatek i zdjęć.
 - Wygląd Podo-Profilaktyki także po prawdziwym zalogowaniu, nie tylko w demo.
 
@@ -33,9 +35,9 @@ Nowe funkcje demo zostały połączone z backendem. Pierwsza instalacja nie doda
 
 ## Zdjęcia
 
-W karcie pacjenta wybierz problem, ewentualną wizytę, etap i datę, potem „Zrób zdjęcie” lub „Z galerii”. Zatwierdzony plik zapisuje się automatycznie w wybranym wcześniej kontekście, także gdy podczas kompresji otworzysz inną kartę.
+W karcie pacjenta kliknij „Zrób zdjęcie” lub „Z galerii”. Aplikacja proponuje pacjenta oraz aktualną albo ostatnią wizytę i pokazuje jedno krótkie potwierdzenie. Ponieważ problem i obszar są już zapisane przy wizycie, nie trzeba ich ponownie wybierać. Wyjątkowe przypisanie można zmienić w zwijanej sekcji.
 
-Serwer usuwa EXIF i zapisuje JPEG do 1600 px / 2 MB. Oryginał nie jest archiwizowany. Datę wykonania wpisuje personel; data dodania jest zapisywana oddzielnie. Bucket jest prywatny, odczyt po autoryzacji przez URL ważny 90 sekund. Nie udostępniaj tych linków. Zdjęcia nie są wysyłane do AI. Przy błędzie można ponowić zapis, dopóki strona pozostaje otwarta; potwierdzenie pojawia się po zapisaniu metadanych.
+Serwer usuwa EXIF i zapisuje JPEG do 1600 px / 2 MB. Oryginał nie jest archiwizowany. Data wykonania i data dodania są zapisywane oddzielnie. Bucket jest prywatny, odczyt po autoryzacji przez URL ważny 90 sekund. Nie udostępniaj tych linków. Przy błędzie można ponowić zapis, dopóki strona pozostaje otwarta; komunikat sukcesu pojawia się po zapisaniu metadanych.
 
 Sprawdź fizyczny aparat Android/iPhone przez HTTPS. Test kontrolki i emulacja telefonu nie potwierdzają obsługi każdego urządzenia ani formatu HEIC.
 
@@ -53,7 +55,7 @@ Kolejka jest sprawdzana co 10 minut. Przypomnienie planowane jest 24 godziny prz
 
 To nie jest deklaracja gotowości prawnej ani niezależny audyt bezpieczeństwa. Ustal zasady dostępu, przetwarzania danych zdrowotnych, zgód, retencji, korekt, kopii zapasowych i umów z dostawcami. Kopia bazy nie zastępuje kopii plików Storage. Wykonaj próbę odtworzenia obu. Nie zbieraj zbędnych danych ani danych osób postronnych.
 
-AI jest opcjonalne i nie jest wymagane do uruchomienia panelu. Nie skonfigurowano go w chmurze. Bez klucza i modelu nie działa. Przekazanie kontekstu pacjenta wymaga oddzielnego potwierdzenia w UI. Pomijane są pola nazwiska, kontaktu, daty urodzenia, danych opiekuna i notatek relacyjnych, ale tekst swobodny nadal może identyfikować osobę. Nie oznacza to pełnej anonimizacji. AI nie diagnozuje, nie zmienia kartoteki i nie otrzymuje zdjęć. Zapis ogólnego pomysłu wykonuje aplikacja na polecenie i potwierdza dopiero po odpowiedzi bazy.
+Zakładki „Pomysły” i „Doradca AI” zostały usunięte z tej wersji. Aplikacja nie wymaga klucza OpenAI i nie wysyła danych pacjentów ani zdjęć do modelu.
 
 ## Lokalnie
 

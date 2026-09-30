@@ -30,7 +30,7 @@ Nie dodawaj `node_modules`, `.env` z wartościami, zrzutów bazy, zdjęć pacjen
 ## 2. Supabase — nowa, pusta baza
 
 1. Utwórz osobny projekt Supabase. Dobierz region i plan do przyjętych zasad przetwarzania danych i kopii zapasowych.
-2. W SQL Editor uruchom cały **`supabase/INSTALL-FRESH.sql`** z tej paczki. To jedna transakcja, łącząca migracje 001–004. Nie uruchamiaj potem osobno 001–004. Nie wklejaj tego do bazy SPA.
+2. W SQL Editor uruchom cały **`supabase/INSTALL-FRESH.sql`** z tej paczki. To jedna transakcja, łącząca migracje 001–005. Nie uruchamiaj potem osobno 001–005. Nie wklejaj tego do bazy SPA.
 3. Sprawdź, czy istnieją tabele `podo_patients`, `podo_appointments`, `podo_cases`, `podo_encounters`, `podo_photos` i `podo_mail` oraz prywatny bucket `podo-patient-photos`.
 4. W `podo_services` powinno być 37 pozycji. Kartoteka i rezerwacje mają być puste. Pierwsza instalacja nie przenosi pacjentów demo.
 5. W ustawieniach Auth wyłącz **Allow new users to sign up** oraz anonimowe logowanie. Panel nie wymaga publicznej rejestracji. [Dokumentacja Auth](https://supabase.com/docs/guides/auth/general-configuration).
@@ -48,7 +48,7 @@ Samo konto Auth nie uprawnia do odczytu pacjentów — musi być wpis w `podo_ad
 
 Nie dodawaj publicznych policies do tabel lub Storage. Nie przełączaj bucketa na publiczny. Backend obsługuje dostęp po sprawdzeniu sesji i członkostwa.
 
-Jeżeli baza PodoCare została już wcześniej zainstalowana, **nie uruchamiaj INSTALL-FRESH**. Najpierw ustal zastosowane migracje i wykonaj kopię. Dla schematu 001+002 istnieje migracja rozszerzająca 003; 004 to konfiguracja wyłącznie pustego gabinetu i odmówi nadpisania działających danych. Aktualizacja już używanej bazy wymaga oddzielnej weryfikacji.
+Jeżeli baza PodoCare została już wcześniej zainstalowana, **nie uruchamiaj INSTALL-FRESH**. Najpierw ustal zastosowane migracje i wykonaj kopię. Dla schematu 001+002 istnieje migracja rozszerzająca 003; 004 to konfiguracja wyłącznie pustego gabinetu i odmówi nadpisania działających danych. Migracja 005 dodaje aktywną wizytę, powiązanie zdjęcia z rezerwacją oraz bezpieczne przesuwanie terminu — nie usuwa istniejących wpisów. Aktualizacja już używanej bazy wymaga oddzielnej weryfikacji.
 
 ## 3. Resend — poczta, bez panelu rezerwacji
 
@@ -92,10 +92,6 @@ Klucz publishable / anon jest przeznaczony do logowania w przeglądarce. Nie ozn
 Nie potrzebujesz kopii zmiennych ze SPA takich jak `PUBLIC_SUPABASE_ANON_KEY`, `PUBLIC_SUPABASE_URL`, `THERAPIST_EMAIL` lub `CRON_SECRET`. Ten projekt ma własny zestaw powyżej. Nie ustawiaj ręcznie zastrzeżonego `CONTEXT`: skrypt budowy odczytuje go na Netlify i utrwala blokadę poczty w preview.
 
 Po zmianie wartości Functions wykonaj nowy deploy, żeby zaczęły obowiązywać. Nie uruchamiaj kilku deployów podczas wgrywania pojedynczych plików; najpierw komplet plików i zmiennych, potem jedna budowa. [Netlify: zmienne przy wdrożeniu](https://docs.netlify.com/build/functions/environment-variables/).
-
-### Opcjonalny Doradca AI
-
-Do kalendarza, kart, zdjęć i e-maili AI nie jest potrzebne. Na pierwszy start pozostaw nieskonfigurowane `OPENAI_API_KEY` i `OPENAI_ADVISOR_MODEL`. Ich uruchomienie to oddzielny etap po uzgodnieniu zasad przetwarzania danych; istniejący ekran informuje o braku konfiguracji. Nie podawaj klucza przeglądarce.
 
 ### Co ma być widoczne po budowie
 

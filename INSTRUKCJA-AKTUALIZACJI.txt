@@ -1,0 +1,11 @@
+PACZKA AKTUALIZACYJNA V6 — TYLKO PLIKI NOWE I ZMIENIONE
+
+1. Rozpakuj zawartość paczki do głównego katalogu repozytorium GitHub.
+2. Zezwól na zastąpienie istniejących plików.
+3. Usuń z repozytorium plik:
+   netlify/lib/advisor.js
+4. Jeżeli baza Supabase już istnieje, uruchom w SQL Editor wyłącznie:
+   supabase/005_simple_visit_workflow.sql
+5. Nie uruchamiaj INSTALL-FRESH.sql na istniejącej bazie. Ten plik służy tylko do tworzenia nowej bazy od zera.
+
+Paczka nie zawiera sekretów ani wartości zmiennych środowiskowych.
